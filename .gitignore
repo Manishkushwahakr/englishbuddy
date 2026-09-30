@@ -1,0 +1,6 @@
+.env
+Eenv/
+__pycache__/
+*.pyc
+MIND.md
+notes

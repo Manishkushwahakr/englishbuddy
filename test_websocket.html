@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+
+<body>
+
+<h2>WebSocket Conversation Test</h2>
+
+<label>JWT Token:</label>
+<br>
+<input
+    type="text"
+    id="token"
+    placeholder="Paste your JWT token here"
+    style="width: 500px;"
+>
+
+<br><br>
+
+<label>Conversation ID:</label>
+<br>
+<input
+    type="text"
+    id="conversationId"
+    placeholder="Paste conversation ID here"
+    style="width: 500px;"
+>
+
+<br><br>
+
+<button onclick="connect()">Connect</button>
+<button onclick="sendOffer()">Send Offer</button>
+<button onclick="sendAnswer()">Send Answer</button>
+<button onclick="sendIceCandidate()">Send ICE Candidate</button>
+
+<br><br>
+
+<pre id="output"></pre>
+
+
+<script>
+
+let socket;
+
+
+function log(message) {
+
+    document.getElementById("output").textContent +=
+        message + "\n";
+
+}
+
+
+function connect() {
+
+    const token =
+        document.getElementById("token").value.trim();
+
+    const conversationId =
+        document.getElementById("conversationId").value.trim();
+
+
+    if (!token) {
+
+        log("Please enter JWT token");
+
+        return;
+    }
+
+
+    if (!conversationId) {
+
+        log("Please enter conversation ID");
+
+        return;
+    }
+
+
+    socket = new WebSocket(
+        `ws://127.0.0.1:8000/ws/conversation/${conversationId}?token=${token}`
+    );
+
+
+    socket.onopen = function() {
+
+        log("Connected to WebSocket");
+
+    };
+
+
+    socket.onmessage = function(event) {
+
+        log("Server: " + event.data);
+
+    };
+
+
+    socket.onclose = function() {
+
+        log("Disconnected");
+
+    };
+
+
+    socket.onerror = function(error) {
+
+        log("WebSocket error");
+
+    };
+
+}
+
+
+function sendOffer() {
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        log("WebSocket is not connected");
+        return;
+    }
+
+    socket.send(JSON.stringify({
+        type: "offer",
+        sdp: "test-offer-data"
+    }));
+}
+
+
+function sendAnswer() {
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        log("WebSocket is not connected");
+        return;
+    }
+
+    socket.send(JSON.stringify({
+        type: "answer",
+        sdp: "test-answer-data"
+    }));
+}
+
+function sendIceCandidate() {
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        log("WebSocket is not connected");
+        return;
+    }
+
+    socket.send(JSON.stringify({
+        type: "ice_candidate",
+        candidate: "test-ice-candidate-data"
+    }));
+}
+
+</script>
+
+</body>
+</html>
