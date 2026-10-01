@@ -7,6 +7,7 @@
 <body>
 
 <h2>WebSocket Conversation Test</h2>
+<audio id="remoteAudio" autoplay controls></audio>
 
 <label>JWT Token:</label>
 <br>
@@ -34,6 +35,10 @@
 <button onclick="sendOffer()">Send Offer</button>
 <button onclick="sendAnswer()">Send Answer</button>
 <button onclick="sendIceCandidate()">Send ICE Candidate</button>
+<button onclick="startMicrophone()">Start Microphone</button>
+<button onclick="createPeerConnection()">Create WebRTC Connection</button>
+<button onclick="createOffer()">Create & Send Offer</button>
+
 
 <br><br>
 
@@ -42,7 +47,10 @@
 
 <script>
 
+
 let socket;
+let peerConnection;
+let localStream;
 
 
 function log(message) {
@@ -90,9 +98,63 @@ function connect() {
     };
 
 
-    socket.onmessage = function(event) {
+    socket.onmessage = async function(event) {
+
+        const message = JSON.parse(event.data);
 
         log("Server: " + event.data);
+
+
+        if (message.type === "offer") {
+
+            await handleOffer(message);
+
+        }
+
+
+        if (message.type === "answer") {
+
+            try {
+
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription({
+                        type: "answer",
+                        sdp: message.sdp
+                    })
+                );
+
+                log("Remote answer set");
+
+            } catch (error) {
+
+                log("Error setting remote answer");
+
+                console.error(error);
+
+            }
+
+        }
+
+
+        if (message.type === "ice_candidate") {
+
+            try {
+
+                await peerConnection.addIceCandidate(
+                    new RTCIceCandidate(message.candidate)
+                );
+
+                log("Remote ICE candidate added");
+
+            } catch (error) {
+
+                log("Error adding ICE candidate");
+
+                console.error(error);
+
+            }
+
+        }
 
     };
 
@@ -152,6 +214,186 @@ function sendIceCandidate() {
         candidate: "test-ice-candidate-data"
     }));
 }
+
+
+async function startMicrophone() {
+
+    try {
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: false
+        });
+
+        log("Microphone access granted");
+
+        console.log(
+            "Audio tracks:",
+            localStream.getAudioTracks()
+        );
+
+    } catch (error) {
+
+        log("Microphone access denied or unavailable");
+
+        console.error(error);
+    }
+}
+
+
+
+function createPeerConnection() {
+
+    peerConnection = new RTCPeerConnection({
+        iceServers: [
+            {
+                urls: "stun:stun.l.google.com:19302"
+            }
+        ]
+    });
+
+    log("RTCPeerConnection created");
+
+
+    // Add microphone audio track
+    if (localStream) {
+
+        localStream.getTracks().forEach(track => {
+
+            peerConnection.addTrack(
+                track,
+                localStream
+            );
+
+        });
+
+        log("Microphone track added to WebRTC");
+    }
+
+
+    // ICE candidate
+    peerConnection.onicecandidate = function(event) {
+
+        if (event.candidate) {
+
+            log("Real ICE candidate generated");
+
+            socket.send(JSON.stringify({
+                type: "ice_candidate",
+                candidate: event.candidate
+            }));
+
+            log("ICE candidate sent");
+        }
+    };
+
+
+    peerConnection.ontrack = function(event) {
+
+        const remoteAudio = document.getElementById("remoteAudio");
+
+        if (event.streams && event.streams[0]) {
+            remoteAudio.srcObject = event.streams[0];
+        }
+
+        log("Remote audio track received");
+    };
+
+
+    // Connection state
+    peerConnection.onconnectionstatechange = function() {
+
+        log(
+            "Connection state: " +
+            peerConnection.connectionState
+        );
+
+    };
+}
+
+
+async function createOffer() {
+
+    if (!peerConnection) {
+        log("Create WebRTC connection first");
+        return;
+    }
+
+    try {
+
+        const offer = await peerConnection.createOffer();
+
+        await peerConnection.setLocalDescription(offer);
+
+        log("Real WebRTC offer created");
+
+        log(
+            "Offer SDP length: " +
+            offer.sdp.length
+        );
+
+        socket.send(JSON.stringify({
+            type: "offer",
+            sdp: offer.sdp
+        }));
+
+        log("Offer sent to other user");
+
+    } catch (error) {
+
+        log("Error creating offer");
+
+        console.error(error);
+    }
+}
+
+
+
+async function handleOffer(offer) {
+
+    if (!peerConnection) {
+        createPeerConnection();
+    }
+
+    try {
+
+        const remoteDescription = new RTCSessionDescription({
+            type: "offer",
+            sdp: offer.sdp
+        });
+
+        await peerConnection.setRemoteDescription(
+            remoteDescription
+        );
+
+        log("Remote offer set");
+
+        const answer = await peerConnection.createAnswer();
+
+        await peerConnection.setLocalDescription(answer);
+
+        log("Real WebRTC answer created");
+
+        log(
+            "Answer SDP length: " +
+            answer.sdp.length
+        );
+
+        socket.send(JSON.stringify({
+            type: "answer",
+            sdp: answer.sdp
+        }));
+
+        log("Answer sent to other user");
+
+    } catch (error) {
+
+        log("Error handling offer");
+
+        console.error(error);
+    }
+}
+
 
 </script>
 
