@@ -1,401 +1,943 @@
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>WebSocket Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImproBuddy - Audio & STT Test</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 16px;
+            background: #f4f6fb;
+            color: #222;
+        }
+
+        h1, h2 {
+            color: #273469;
+        }
+
+        .panel {
+            background: white;
+            padding: 20px;
+            margin: 16px 0;
+            border-radius: 12px;
+            border: 1px solid #e0e4ef;
+        }
+
+        label {
+            display: block;
+            font-weight: bold;
+            margin-top: 12px;
+        }
+
+        input {
+            width: 100%;
+            max-width: 650px;
+            padding: 11px;
+            margin-top: 5px;
+            border: 1px solid #ccd2e0;
+            border-radius: 7px;
+        }
+
+        button {
+            padding: 11px 15px;
+            margin: 8px 5px 0 0;
+            border: none;
+            border-radius: 7px;
+            background: #273469;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1b2655;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 8px;
+            background: #eee;
+            border-radius: 6px;
+        }
+
+        #transcript, #logs {
+            margin-top: 12px;
+            max-height: 350px;
+            overflow-y: auto;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        .transcript-line {
+            padding: 12px;
+            margin: 8px 0;
+            background: #eef2ff;
+            border-radius: 7px;
+        }
+
+        .speaker {
+            font-weight: bold;
+            color: #273469;
+            margin-bottom: 4px;
+        }
+
+        .log-line {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+
+        .hint {
+            color: #666;
+            font-size: 14px;
+        }
+
+        audio {
+            display: block;
+            width: 100%;
+            max-width: 400px;
+            margin-top: 10px;
+        }
+    </style>
 </head>
 
 <body>
 
-<h2>WebSocket Conversation Test</h2>
-<audio id="remoteAudio" autoplay controls></audio>
+    <h1>ImproBuddy</h1>
+    <p>Audio Call + Live Speech-to-Text Testing</p>
 
-<label>JWT Token:</label>
-<br>
-<input
-    type="text"
-    id="token"
-    placeholder="Paste your JWT token here"
-    style="width: 500px;"
->
+    <!-- SECTION 1: CONNECTION -->
+    <section class="panel">
+        <h2>1. Connect to Backend</h2>
 
-<br><br>
+        <label for="backendUrl">Backend URL</label>
+        <input
+            id="backendUrl"
+            type="url"
+            value="http://127.0.0.1:8000"
+            placeholder="http://127.0.0.1:8000"
+        >
 
-<label>Conversation ID:</label>
-<br>
-<input
-    type="text"
-    id="conversationId"
-    placeholder="Paste conversation ID here"
-    style="width: 500px;"
->
+        <label for="token">JWT Token</label>
+        <input
+            id="token"
+            type="password"
+            placeholder="Paste your JWT token"
+            autocomplete="off"
+        >
 
-<br><br>
+        <label for="conversationId">Conversation ID</label>
+        <input
+            id="conversationId"
+            placeholder="Enter conversation ID"
+        >
 
-<button onclick="connect()">Connect</button>
-<button onclick="sendOffer()">Send Offer</button>
-<button onclick="sendAnswer()">Send Answer</button>
-<button onclick="sendIceCandidate()">Send ICE Candidate</button>
-<button onclick="startMicrophone()">Start Microphone</button>
-<button onclick="createPeerConnection()">Create WebRTC Connection</button>
-<button onclick="createOffer()">Create & Send Offer</button>
+        <button id="connectBtn" type="button">
+            Connect WebSocket
+        </button>
 
+        <button id="disconnectBtn" type="button" disabled>
+            Disconnect
+        </button>
 
-<br><br>
+        <p id="connectionStatus" class="status">
+            Disconnected
+        </p>
+    </section>
 
-<pre id="output"></pre>
+    <!-- SECTION 2: WEBRTC -->
+    <section class="panel">
+        <h2>2. Audio Call</h2>
 
+        <p class="hint">
+            Connect WebSocket before starting the audio call.
+        </p>
+
+        <button id="micBtn" type="button">
+            Start Microphone
+        </button>
+
+        <button id="peerBtn" type="button">
+            Create WebRTC Connection
+        </button>
+
+        <button id="offerBtn" type="button">
+            Create & Send Offer
+        </button>
+
+        <label for="remoteAudio">Remote Audio</label>
+        <audio id="remoteAudio" autoplay controls></audio>
+    </section>
+
+    <!-- SECTION 3: SPEECH TO TEXT -->
+    <section class="panel">
+        <h2>3. Live Transcription</h2>
+
+        <p class="hint">
+            Start your microphone, connect WebSocket, and start
+            transcription. Audio is sent in five-second chunks.
+        </p>
+
+        <button id="startSttBtn" type="button" disabled>
+            Start Transcription
+        </button>
+
+        <button id="stopSttBtn" type="button" disabled>
+            Stop Transcription
+        </button>
+
+        <button id="clearTranscriptBtn" type="button">
+            Clear Transcript
+        </button>
+
+        <div id="transcript">
+            Your transcript will appear here.
+        </div>
+    </section>
+
+    <!-- SECTION 4: LOGS -->
+    <section class="panel">
+        <h2>4. Debug Logs</h2>
+
+        <button id="clearLogsBtn" type="button">
+            Clear Logs
+        </button>
+
+        <div id="logs"></div>
+    </section>
 
 <script>
+"use strict";
 
+// ========================================
+// 1. GLOBAL VARIABLES
+// ========================================
 
-let socket;
-let peerConnection;
-let localStream;
+let socket = null;
+let localStream = null;
+let peerConnection = null;
+let currentUserId = null;
 
+let sttRecording = false;
+let activeRecorder = null;
+let sttTimer = null;
+
+let connectionAttempt = 0;
+
+const pendingIceCandidates = [];
+
+const $ = (id) => document.getElementById(id);
+
+const transcriptBox = $("transcript");
+const logsBox = $("logs");
+
+// ========================================
+// 2. LOGGING AND STATUS
+// ========================================
 
 function log(message) {
+    const line = document.createElement("div");
 
-    document.getElementById("output").textContent +=
-        message + "\n";
+    line.className = "log-line";
+    line.textContent =
+        `${new Date().toLocaleTimeString()} - ${message}`;
 
+    logsBox.prepend(line);
 }
 
-
-function connect() {
-
-    const token =
-        document.getElementById("token").value.trim();
-
-    const conversationId =
-        document.getElementById("conversationId").value.trim();
-
-
-    if (!token) {
-
-        log("Please enter JWT token");
-
-        return;
-    }
-
-
-    if (!conversationId) {
-
-        log("Please enter conversation ID");
-
-        return;
-    }
-
-
-    socket = new WebSocket(
-        `ws://127.0.0.1:8000/ws/conversation/${conversationId}?token=${token}`
-    );
-
-
-    socket.onopen = function() {
-
-        log("Connected to WebSocket");
-
-    };
-
-
-    socket.onmessage = async function(event) {
-
-        const message = JSON.parse(event.data);
-
-        log("Server: " + event.data);
-
-
-        if (message.type === "offer") {
-
-            await handleOffer(message);
-
-        }
-
-
-        if (message.type === "answer") {
-
-            try {
-
-                await peerConnection.setRemoteDescription(
-                    new RTCSessionDescription({
-                        type: "answer",
-                        sdp: message.sdp
-                    })
-                );
-
-                log("Remote answer set");
-
-            } catch (error) {
-
-                log("Error setting remote answer");
-
-                console.error(error);
-
-            }
-
-        }
-
-
-        if (message.type === "ice_candidate") {
-
-            try {
-
-                await peerConnection.addIceCandidate(
-                    new RTCIceCandidate(message.candidate)
-                );
-
-                log("Remote ICE candidate added");
-
-            } catch (error) {
-
-                log("Error adding ICE candidate");
-
-                console.error(error);
-
-            }
-
-        }
-
-    };
-
-
-    socket.onclose = function() {
-
-        log("Disconnected");
-
-    };
-
-
-    socket.onerror = function(error) {
-
-        log("WebSocket error");
-
-    };
-
+function setStatus(message) {
+    $("connectionStatus").textContent = message;
 }
 
-
-function sendOffer() {
-
+function sendMessage(message) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-        log("WebSocket is not connected");
+        log("Cannot send: WebSocket is not connected.");
+        return false;
+    }
+
+    socket.send(JSON.stringify(message));
+    return true;
+}
+
+// ========================================
+// 3. WEBSOCKET CONNECTION
+// ========================================
+
+function connectWebSocket() {
+    const backendUrl = $("backendUrl").value.trim();
+    const token = $("token").value.trim();
+    const conversationId = $("conversationId").value.trim();
+
+    if (!backendUrl || !token || !conversationId) {
+        alert(
+            "Please enter Backend URL, JWT Token, and Conversation ID."
+        );
         return;
     }
 
-    socket.send(JSON.stringify({
-        type: "offer",
-        sdp: "test-offer-data"
-    }));
-}
-
-
-function sendAnswer() {
-
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-        log("WebSocket is not connected");
+    if (
+        socket &&
+        (
+            socket.readyState === WebSocket.OPEN ||
+            socket.readyState === WebSocket.CONNECTING
+        )
+    ) {
+        log("WebSocket is already connected or connecting.");
         return;
     }
 
-    socket.send(JSON.stringify({
-        type: "answer",
-        sdp: "test-answer-data"
-    }));
-}
-
-function sendIceCandidate() {
-
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-        log("WebSocket is not connected");
-        return;
-    }
-
-    socket.send(JSON.stringify({
-        type: "ice_candidate",
-        candidate: "test-ice-candidate-data"
-    }));
-}
-
-
-async function startMicrophone() {
+    let wsUrl;
 
     try {
+        const backend = new URL(backendUrl);
+
+        if (
+            backend.protocol !== "http:" &&
+            backend.protocol !== "https:"
+        ) {
+            throw new Error("Use an HTTP or HTTPS backend URL.");
+        }
+
+        const wsProtocol =
+            backend.protocol === "https:" ? "wss:" : "ws:";
+
+        const basePath = backend.pathname.replace(/\/+$/, "");
+
+        wsUrl = new URL(
+            `${wsProtocol}//${backend.host}${basePath}` +
+            `/ws/conversation/${encodeURIComponent(conversationId)}`
+        );
+
+        wsUrl.searchParams.set("token", token);
+
+    } catch (error) {
+        log("Invalid backend URL: " + error.message);
+        alert("Use a URL such as http://127.0.0.1:8000");
+        return;
+    }
+
+    connectionAttempt++;
+    const thisAttempt = connectionAttempt;
+
+    setStatus("Connecting...");
+    $("connectBtn").disabled = true;
+
+    // Do not print the JWT token in logs.
+    log("Connecting to WebSocket backend...");
+
+    try {
+        socket = new WebSocket(wsUrl.toString());
+    } catch (error) {
+        $("connectBtn").disabled = false;
+        setStatus("Connection failed");
+        log("WebSocket creation error: " + error.message);
+        return;
+    }
+
+    socket.onopen = function () {
+        if (thisAttempt !== connectionAttempt) return;
+
+        setStatus("WebSocket connected");
+        $("connectBtn").disabled = false;
+        $("disconnectBtn").disabled = false;
+
+        $("startSttBtn").disabled = !localStream;
+
+        log("WebSocket connection successful.");
+    };
+
+    socket.onmessage = async function (event) {
+        let message;
+
+        try {
+            message = JSON.parse(event.data);
+        } catch {
+            log("Invalid message received from server.");
+            return;
+        }
+
+        if (message.type === "connected") {
+            currentUserId = String(message.user_id);
+
+            log(
+                "Joined conversation: " +
+                message.conversation_id
+            );
+        }
+
+        else if (message.type === "offer") {
+            log("WebRTC offer received.");
+            await handleOffer(message);
+        }
+
+        else if (message.type === "answer") {
+            log("WebRTC answer received.");
+
+            if (peerConnection) {
+                try {
+                    await peerConnection.setRemoteDescription({
+                        type: "answer",
+                        sdp: message.sdp
+                    });
+
+                    await processPendingIceCandidates();
+
+                } catch (error) {
+                    log("Answer error: " + error.message);
+                }
+            }
+        }
+
+        else if (message.type === "ice_candidate") {
+            await handleIceCandidate(message);
+        }
+
+        else if (message.type === "transcript") {
+            displayTranscript(message);
+        }
+
+        else if (message.type === "stt_error") {
+            log("STT error: " + message.message);
+        }
+
+        else if (message.type === "stt_status") {
+            log("STT status: " + (
+                message.message || message.status
+            ));
+        }
+
+        else if (message.type === "user_disconnected") {
+            log("Partner disconnected.");
+        }
+
+        else {
+            log("Server message: " + message.type);
+        }
+    };
+
+    socket.onerror = function () {
+        if (thisAttempt !== connectionAttempt) return;
+
+        setStatus("WebSocket error");
+        $("connectBtn").disabled = false;
+
+        log(
+            "Connection error. Check backend URL, JWT token, " +
+            "conversation ID, and backend terminal."
+        );
+    };
+
+    socket.onclose = function (event) {
+        if (thisAttempt !== connectionAttempt) return;
+
+        setStatus("Disconnected (" + event.code + ")");
+
+        $("connectBtn").disabled = false;
+        $("disconnectBtn").disabled = true;
+        $("startSttBtn").disabled = true;
+
+        log(
+            "WebSocket closed. Code: " + event.code +
+            (event.reason ? " - " + event.reason : "")
+        );
+
+        stopTranscription(false);
+    };
+}
+
+function disconnectWebSocket() {
+    connectionAttempt++;
+
+    stopTranscription(false);
+
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+        socket.close(1000, "Disconnected by user");
+    }
+
+    socket = null;
+
+    $("connectBtn").disabled = false;
+    $("disconnectBtn").disabled = true;
+    $("startSttBtn").disabled = true;
+
+    setStatus("Disconnected");
+    log("Disconnected by user.");
+}
+
+// ========================================
+// 4. MICROPHONE
+// ========================================
+
+async function startMicrophone() {
+    try {
+        if (localStream) {
+            log("Microphone is already active.");
+            return;
+        }
+
+        if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error(
+                "Microphone access requires localhost or HTTPS."
+            );
+        }
 
         localStream = await navigator.mediaDevices.getUserMedia({
             audio: true,
             video: false
         });
 
-        log("Microphone access granted");
+        $("micBtn").disabled = true;
 
-        console.log(
-            "Audio tracks:",
-            localStream.getAudioTracks()
+        $("startSttBtn").disabled = !(
+            socket && socket.readyState === WebSocket.OPEN
         );
+
+        log("Microphone access granted.");
+
+        if (peerConnection) {
+            localStream.getTracks().forEach(track => {
+                const alreadyAdded = peerConnection
+                    .getSenders()
+                    .some(sender => sender.track === track);
+
+                if (!alreadyAdded) {
+                    peerConnection.addTrack(track, localStream);
+                }
+            });
+        }
 
     } catch (error) {
-
-        log("Microphone access denied or unavailable");
-
-        console.error(error);
+        log("Microphone error: " + error.message);
+        alert("Could not start microphone: " + error.message);
     }
 }
 
-
+// ========================================
+// 5. WEBRTC AUDIO CALL
+// ========================================
 
 function createPeerConnection() {
-
-    peerConnection = new RTCPeerConnection({
-        iceServers: [
-            {
-                urls: "stun:stun.l.google.com:19302"
-            }
-        ]
-    });
-
-    log("RTCPeerConnection created");
-
-
-    // Add microphone audio track
-    if (localStream) {
-
-        localStream.getTracks().forEach(track => {
-
-            peerConnection.addTrack(
-                track,
-                localStream
-            );
-
-        });
-
-        log("Microphone track added to WebRTC");
-    }
-
-
-    // ICE candidate
-    peerConnection.onicecandidate = function(event) {
-
-        if (event.candidate) {
-
-            log("Real ICE candidate generated");
-
-            socket.send(JSON.stringify({
-                type: "ice_candidate",
-                candidate: event.candidate
-            }));
-
-            log("ICE candidate sent");
-        }
-    };
-
-
-    peerConnection.ontrack = function(event) {
-
-        const remoteAudio = document.getElementById("remoteAudio");
-
-        if (event.streams && event.streams[0]) {
-            remoteAudio.srcObject = event.streams[0];
-        }
-
-        log("Remote audio track received");
-    };
-
-
-    // Connection state
-    peerConnection.onconnectionstatechange = function() {
-
-        log(
-            "Connection state: " +
-            peerConnection.connectionState
-        );
-
-    };
-}
-
-
-async function createOffer() {
-
-    if (!peerConnection) {
-        log("Create WebRTC connection first");
+    if (peerConnection) {
+        log("WebRTC connection already exists.");
         return;
     }
 
+    if (!localStream) {
+        alert("Start Microphone first.");
+        return;
+    }
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("Connect WebSocket first.");
+        return;
+    }
+
+    peerConnection = new RTCPeerConnection({
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" }
+        ]
+    });
+
+    localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+    });
+
+    peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+            sendMessage({
+                type: "ice_candidate",
+                candidate: event.candidate
+            });
+        }
+    };
+
+    peerConnection.ontrack = event => {
+        $("remoteAudio").srcObject = event.streams[0];
+        log("Remote audio received.");
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+        log("WebRTC state: " + peerConnection.connectionState);
+    };
+
+    log("WebRTC connection created.");
+}
+
+async function createOffer() {
     try {
+        if (!localStream) {
+            alert("Start Microphone first.");
+            return;
+        }
+
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            alert("Connect WebSocket first.");
+            return;
+        }
+
+        if (!peerConnection) {
+            createPeerConnection();
+        }
+
+        if (!peerConnection) return;
 
         const offer = await peerConnection.createOffer();
 
         await peerConnection.setLocalDescription(offer);
 
-        log("Real WebRTC offer created");
-
-        log(
-            "Offer SDP length: " +
-            offer.sdp.length
-        );
-
-        socket.send(JSON.stringify({
+        sendMessage({
             type: "offer",
-            sdp: offer.sdp
-        }));
+            sdp: peerConnection.localDescription.sdp
+        });
 
-        log("Offer sent to other user");
+        log("WebRTC offer sent.");
 
     } catch (error) {
-
-        log("Error creating offer");
-
-        console.error(error);
+        log("Offer error: " + error.message);
     }
 }
 
-
-
-async function handleOffer(offer) {
-
-    if (!peerConnection) {
-        createPeerConnection();
-    }
-
+async function handleOffer(message) {
     try {
+        if (!localStream) {
+            await startMicrophone();
+        }
 
-        const remoteDescription = new RTCSessionDescription({
+        if (!localStream) return;
+
+        if (!peerConnection) {
+            createPeerConnection();
+        }
+
+        if (!peerConnection) return;
+
+        await peerConnection.setRemoteDescription({
             type: "offer",
-            sdp: offer.sdp
+            sdp: message.sdp
         });
 
-        await peerConnection.setRemoteDescription(
-            remoteDescription
-        );
-
-        log("Remote offer set");
+        await processPendingIceCandidates();
 
         const answer = await peerConnection.createAnswer();
 
         await peerConnection.setLocalDescription(answer);
 
-        log("Real WebRTC answer created");
-
-        log(
-            "Answer SDP length: " +
-            answer.sdp.length
-        );
-
-        socket.send(JSON.stringify({
+        sendMessage({
             type: "answer",
-            sdp: answer.sdp
-        }));
+            sdp: peerConnection.localDescription.sdp
+        });
 
-        log("Answer sent to other user");
+        log("WebRTC answer sent.");
 
     } catch (error) {
-
-        log("Error handling offer");
-
-        console.error(error);
+        log("Offer handling error: " + error.message);
     }
 }
 
+async function handleIceCandidate(message) {
+    try {
+        if (!message.candidate) return;
+
+        const candidate = new RTCIceCandidate(message.candidate);
+
+        if (!peerConnection || !peerConnection.remoteDescription) {
+            pendingIceCandidates.push(candidate);
+            return;
+        }
+
+        await peerConnection.addIceCandidate(candidate);
+
+    } catch (error) {
+        log("ICE candidate error: " + error.message);
+    }
+}
+
+async function processPendingIceCandidates() {
+    if (!peerConnection || !peerConnection.remoteDescription) {
+        return;
+    }
+
+    while (pendingIceCandidates.length > 0) {
+        const candidate = pendingIceCandidates.shift();
+
+        try {
+            await peerConnection.addIceCandidate(candidate);
+        } catch (error) {
+            log("Queued ICE error: " + error.message);
+        }
+    }
+}
+
+// ========================================
+// 6. SPEECH-TO-TEXT
+// ========================================
+
+function startTranscription() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("Connect WebSocket first.");
+        return;
+    }
+
+    if (!localStream) {
+        alert("Start Microphone first.");
+        return;
+    }
+
+    if (sttRecording) return;
+
+    sttRecording = true;
+
+    $("startSttBtn").disabled = true;
+    $("stopSttBtn").disabled = false;
+
+    log("Live transcription started.");
+
+    recordNextChunk();
+}
+
+function stopTranscription(showLog = true) {
+    sttRecording = false;
+
+    clearTimeout(sttTimer);
+
+    $("startSttBtn").disabled = !(
+        socket &&
+        socket.readyState === WebSocket.OPEN &&
+        localStream
+    );
+
+    $("stopSttBtn").disabled = true;
+
+    if (
+        activeRecorder &&
+        activeRecorder.state !== "inactive"
+    ) {
+        try {
+            activeRecorder.stop();
+        } catch (error) {
+            log("Recorder stop error: " + error.message);
+        }
+    }
+
+    if (showLog) {
+        log("Stopping transcription.");
+    }
+}
+
+function recordNextChunk() {
+    if (
+        !sttRecording ||
+        !localStream ||
+        !socket ||
+        socket.readyState !== WebSocket.OPEN
+    ) {
+        stopTranscription(false);
+        return;
+    }
+
+    try {
+        const options = {};
+
+        if (
+            MediaRecorder.isTypeSupported(
+                "audio/webm;codecs=opus"
+            )
+        ) {
+            options.mimeType = "audio/webm;codecs=opus";
+        }
+
+        const recorder = new MediaRecorder(localStream, options);
+
+        activeRecorder = recorder;
+
+        const chunks = [];
+
+        recorder.ondataavailable = event => {
+            if (event.data && event.data.size > 0) {
+                chunks.push(event.data);
+            }
+        };
+
+        recorder.onerror = event => {
+            log(
+                "Recorder error: " +
+                (event.error?.message || "Unknown error")
+            );
+        };
+
+        recorder.onstop = async () => {
+            clearTimeout(sttTimer);
+
+            if (chunks.length > 0) {
+                const blob = new Blob(chunks, {
+                    type: recorder.mimeType || "audio/webm"
+                });
+
+                try {
+                    await sendAudioChunk(blob);
+                } catch (error) {
+                    log("Audio upload error: " + error.message);
+                }
+            }
+
+            if (activeRecorder === recorder) {
+                activeRecorder = null;
+            }
+
+            if (sttRecording) {
+                recordNextChunk();
+            }
+        };
+
+        // Record a standalone audio chunk.
+        recorder.start();
+
+        sttTimer = setTimeout(() => {
+            if (recorder.state !== "inactive") {
+                recorder.stop();
+            }
+        }, 5000);
+
+    } catch (error) {
+        log("Could not start recorder: " + error.message);
+        stopTranscription(false);
+    }
+}
+
+async function sendAudioChunk(blob) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    if (!blob.size) return;
+
+    const buffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    let binary = "";
+    const blockSize = 0x8000;
+
+    for (let i = 0; i < bytes.length; i += blockSize) {
+        binary += String.fromCharCode(
+            ...bytes.subarray(i, i + blockSize)
+        );
+    }
+
+    const audioBase64 = btoa(binary);
+
+    sendMessage({
+        type: "audio_chunk",
+        audio: audioBase64
+    });
+
+    log("Audio chunk sent: " + blob.size + " bytes.");
+}
+
+// ========================================
+// 7. TRANSCRIPT DISPLAY
+// ========================================
+
+function displayTranscript(message) {
+    if (
+        transcriptBox.textContent.trim() ===
+        "Your transcript will appear here."
+    ) {
+        transcriptBox.textContent = "";
+    }
+
+    const line = document.createElement("div");
+    line.className = "transcript-line";
+
+    const speaker = document.createElement("div");
+    speaker.className = "speaker";
+
+    speaker.textContent =
+        String(message.sender_id) === currentUserId
+            ? "You"
+            : "Partner";
+
+    const words = document.createElement("div");
+    words.textContent = message.text || "";
+
+    line.appendChild(speaker);
+    line.appendChild(words);
+
+    transcriptBox.appendChild(line);
+
+    transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
+
+function clearTranscript() {
+    transcriptBox.textContent = "Your transcript will appear here.";
+}
+
+// ========================================
+// 8. BUTTON EVENTS
+// ========================================
+
+$("connectBtn").addEventListener(
+    "click",
+    connectWebSocket
+);
+
+$("disconnectBtn").addEventListener(
+    "click",
+    disconnectWebSocket
+);
+
+$("micBtn").addEventListener(
+    "click",
+    startMicrophone
+);
+
+$("peerBtn").addEventListener(
+    "click",
+    createPeerConnection
+);
+
+$("offerBtn").addEventListener(
+    "click",
+    createOffer
+);
+
+$("startSttBtn").addEventListener(
+    "click",
+    startTranscription
+);
+
+$("stopSttBtn").addEventListener(
+    "click",
+    () => stopTranscription()
+);
+
+$("clearTranscriptBtn").addEventListener(
+    "click",
+    clearTranscript
+);
+
+$("clearLogsBtn").addEventListener(
+    "click",
+    () => logsBox.replaceChildren()
+);
+
+// ========================================
+// 9. INITIALIZATION
+// ========================================
+
+log("Page ready. Enter your backend URL, token, and conversation ID.");
 
 </script>
-
 </body>
 </html>
