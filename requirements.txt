@@ -10,3 +10,4 @@ email-validator
 faster-whisper
 sounddevice
 numpy
+psycopg[binary]
