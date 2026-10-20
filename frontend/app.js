@@ -50,10 +50,21 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    if (error?.name !== "TypeError") {
+      throw error;
+    }
+
+    throw new Error(
+      `Could not reach the backend at ${API_BASE}. The browser cannot distinguish a network failure from CORS blocking this origin (${window.location.origin}). Check the Render service and its FRONTEND_ORIGINS setting.`
+    );
+  }
 
   const data = await response.json().catch(() => ({}));
 

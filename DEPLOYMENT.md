@@ -58,6 +58,10 @@ API URL in `frontend/config.js`; do not put secrets there.
 After the Vercel domain is known, set the same exact origin in Render's
 `FRONTEND_ORIGINS`, then redeploy/restart the Render service. A custom Vercel
 domain must also be included if users will access the frontend through it.
+If browser developer tools show `Failed to fetch`, check the preflight response:
+the API returns `400 Disallowed CORS origin` when the page's exact origin is not
+in `FRONTEND_ORIGINS`. The frontend displays its current page origin in its
+network-error message to help configure the allowlist.
 
 ## Database and secrets
 
