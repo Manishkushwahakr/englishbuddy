@@ -1,0 +1,157 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>ImproBuddy — English Practice</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#">
+      <span class="brand-icon">iB</span>
+      <span>ImproBuddy</span>
+    </a>
+    <div id="user-area" class="user-area hidden">
+      <span id="user-email"></span>
+      <button id="logout-btn" class="btn btn-outline">Log out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="notice" class="notice hidden" role="status"></div>
+
+    <!-- Authentication -->
+    <section id="auth-view" class="view auth-layout active">
+      <div class="hero">
+        <span class="eyebrow">YOUR ENGLISH PRACTICE SPACE</span>
+        <h1>Speak English with <span>confidence.</span></h1>
+        <p>Meet another learner, practice real conversations and build confidence one conversation at a time.</p>
+        <div class="feature-list">
+          <div class="feature"><span>01</span><div><strong>Real conversations</strong><p>Practice with another learner.</p></div></div>
+          <div class="feature"><span>02</span><div><strong>Live transcript</strong><p>See speech recognized during practice.</p></div></div>
+          <div class="feature"><span>03</span><div><strong>Learn at your pace</strong><p>Choose your English level.</p></div></div>
+        </div>
+      </div>
+
+      <div class="panel auth-panel">
+        <div class="tabs">
+          <button class="tab active" data-auth-tab="login">Log in</button>
+          <button class="tab" data-auth-tab="register">Create account</button>
+        </div>
+
+        <form id="login-form">
+          <h2>Welcome back</h2>
+          <p class="muted">Log in to continue practicing.</p>
+          <label for="login-email">Email address</label>
+          <input id="login-email" name="email" type="email" autocomplete="email" required>
+          <label for="login-password">Password</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" minlength="8" required>
+          <button class="btn btn-primary btn-full" type="submit">Log in</button>
+        </form>
+
+        <form id="register-form" class="hidden">
+          <h2>Create your account</h2>
+          <p class="muted">Start your English practice journey.</p>
+          <label for="register-name">Your name</label>
+          <input id="register-name" name="name" type="text" minlength="2" maxlength="100" autocomplete="name" required>
+          <label for="register-email">Email address</label>
+          <input id="register-email" name="email" type="email" autocomplete="email" required>
+          <label for="register-password">Password (minimum 8 characters)</label>
+          <input id="register-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required>
+          <button class="btn btn-primary btn-full" type="submit">Create account</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="dashboard-view" class="view">
+      <div class="page-heading">
+        <span class="eyebrow">YOUR DASHBOARD</span>
+        <h1>Ready to practice<span>?</span></h1>
+        <p class="muted">A little conversation can make a big difference.</p>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="panel practice-panel">
+          <div class="illustration">🎙️</div>
+          <h2>Start speaking</h2>
+          <p class="muted">Find a learner at your level and start an audio-only conversation.</p>
+
+          <form id="practice-form">
+            <label for="english-level">Your English level</label>
+            <select id="english-level" required>
+              <option value="Beginner">Beginner</option>
+              <option value="Intermediate">Intermediate</option>
+              <option value="Advanced">Advanced</option>
+            </select>
+            <button class="btn btn-primary btn-full" type="submit">Find a partner</button>
+          </form>
+        </div>
+
+        <div class="panel info-panel">
+          <span class="eyebrow">YOUR SESSION</span>
+          <h2>Practice, don't worry.</h2>
+          <p class="muted">This first version focuses on speaking with another learner and viewing the live transcript.</p>
+          <div class="info-row"><span class="status-dot"></span><span>Audio-only conversations</span></div>
+          <div class="info-row"><span class="status-dot"></span><span>Live speech-to-text</span></div>
+          <div class="info-row"><span class="status-dot"></span><span>No video required</span></div>
+          <p class="small muted">AI feedback will be added in a later phase.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Matching -->
+    <section id="matching-view" class="view">
+      <div class="panel centered-panel">
+        <div class="loader" aria-hidden="true"></div>
+        <span class="eyebrow">FINDING YOUR PARTNER</span>
+        <h1 id="matching-title">Looking for a learner...</h1>
+        <p id="matching-message" class="muted" aria-live="polite">Keep this page open while we look for a match.</p>
+        <button id="cancel-matching-btn" class="btn btn-outline" type="button">Cancel search</button>
+      </div>
+    </section>
+
+    <!-- Audio call -->
+    <section id="call-view" class="view">
+      <div class="page-heading">
+        <span class="eyebrow">LIVE PRACTICE</span>
+        <h1>Your conversation</h1>
+        <p id="call-status" class="muted" aria-live="polite">Waiting to connect...</p>
+        <button id="start-call-btn" class="btn btn-primary hidden" type="button">Enable microphone and start audio</button>
+      </div>
+
+      <div class="call-grid">
+        <div class="panel call-panel">
+          <div class="avatar">👋</div>
+          <h2>Your speaking session</h2>
+          <p class="muted">Audio-only conversation</p>
+          <div class="call-controls">
+            <button id="mute-btn" class="btn btn-outline" type="button">Mute microphone</button>
+            <button id="end-call-btn" class="btn btn-danger" type="button">End call</button>
+          </div>
+          <audio id="remote-audio" autoplay playsinline controls></audio>
+        </div>
+
+        <div class="panel transcript-panel">
+          <div class="transcript-heading">
+            <div>
+              <h2>Live transcript</h2>
+              <p class="muted small">Recognized speech appears here.</p>
+            </div>
+            <span class="live-label"><span class="status-dot"></span> LIVE</span>
+          </div>
+          <div id="transcript-list" class="transcript-list" aria-live="polite">
+            <p id="transcript-empty" class="muted empty-state">Your conversation transcript will appear here when speech is recognized.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>ImproBuddy · Practice English with confidence</footer>
+</body>
+</html>
