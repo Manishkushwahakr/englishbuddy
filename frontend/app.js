@@ -1,5 +1,5 @@
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = (window.IMPROBUDDY_API_BASE || "").replace(/\/+$/, "");
 const TOKEN_KEY = "improbuddy_access_token";
 
 // DOM elements
@@ -33,6 +33,12 @@ function getToken() {
 
 // Make authenticated API requests
 async function apiRequest(path, options = {}) {
+  if (!API_BASE) {
+    throw new Error(
+      "The backend URL is not configured. Set IMPROBUDDY_API_BASE in frontend/config.js."
+    );
+  }
+
   const headers = {
     "Content-Type": "application/json",
     ...options.headers,

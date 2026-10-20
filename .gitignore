@@ -1,5 +1,7 @@
 .env
 Eenv/
+.venv/
+venv/
 __pycache__/
 *.pyc
 MIND.md
