@@ -44,11 +44,9 @@ Import this repository as a Vercel project and set:
 - **Output Directory:** `.`
 - **Install Command:** leave empty
 
-Before deploying, edit `frontend/config.js`: replace the production fallback
-`""` with the public HTTPS URL of the Render service, for example
-`"https://your-service.onrender.com"`, keeping the local development branch
-unchanged. This URL is public client-side configuration, not a secret. The
-local development default remains
+`frontend/config.js` is configured to use
+`https://englishbuddy-gsgg.onrender.com` for non-local deployments. This URL is
+public client-side configuration, not a secret. The local development default remains
 `http://127.0.0.1:8000` when the frontend is served from `localhost` or
 `127.0.0.1`. If the production URL is missing, the page reports a configuration
 error instead of sending requests to localhost.
@@ -82,7 +80,7 @@ Vercel provides.
 
 ## Smoke checks after deployment
 
-1. Open `https://your-service.onrender.com/health`; expect `{"status":"healthy"}`.
+1. Open `https://englishbuddy-gsgg.onrender.com/health`; expect `{"status":"healthy"}`.
 2. Open the Vercel URL and verify browser developer tools show successful API
    requests to the Render HTTPS origin (not localhost) and no CORS errors.
 3. Register/log in, refresh the page, and log out.
