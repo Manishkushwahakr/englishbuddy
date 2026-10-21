@@ -22,13 +22,13 @@ variables in Render's dashboard:
 | --- | --- |
 | `DATABASE_URL` | The database's internal PostgreSQL connection URL |
 | `SECRET_KEY` | A newly generated, long, random signing key; keep it private |
-| `FRONTEND_ORIGINS` | Exact Vercel origin(s), comma-separated, with no paths |
+| `FRONTEND_ORIGINS` | `https://englishbuddy-for-me.vercel.app` (plus any exact custom domain, comma-separated) |
 
-For `FRONTEND_ORIGINS`, include the production deployment origin, for example
-`https://your-project.vercel.app`. Add a custom domain or a specific Vercel
-preview origin only if that origin needs API access. Do not use `*`. The
-backend defaults to the two local development ports only when this variable is
-unset.
+Set `FRONTEND_ORIGINS` to the exact production deployment origin
+`https://englishbuddy-for-me.vercel.app`. Add a custom domain or a specific
+Vercel preview origin only if that origin needs API access. Do not use `*`.
+When this variable is unset, the backend allows this production origin and
+the local development ports.
 
 The app creates missing database tables during startup. Set a reachable
 PostgreSQL `DATABASE_URL` before the service starts. Table creation is not a
@@ -55,9 +55,11 @@ Because this frontend is plain static files, Vercel project environment
 variables are not injected into its browser JavaScript. Configure the public
 API URL in `frontend/config.js`; do not put secrets there.
 
-After the Vercel domain is known, set the same exact origin in Render's
-`FRONTEND_ORIGINS`, then redeploy/restart the Render service. A custom Vercel
-domain must also be included if users will access the frontend through it.
+If Render already has a `FRONTEND_ORIGINS` environment variable, it overrides
+the code defaults. Ensure its value includes
+`https://englishbuddy-for-me.vercel.app` exactly (no trailing slash or path),
+then redeploy/restart the Render service. A custom Vercel domain must also be
+included if users will access the frontend through it.
 If browser developer tools show `Failed to fetch`, check the preflight response:
 the API returns `400 Disallowed CORS origin` when the page's exact origin is not
 in `FRONTEND_ORIGINS`. The frontend displays its current page origin in its

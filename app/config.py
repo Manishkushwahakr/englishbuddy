@@ -14,16 +14,17 @@ if not DATABASE_URL:
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY is not set")
 
-_LOCAL_FRONTEND_ORIGINS = (
+_DEFAULT_FRONTEND_ORIGINS = (
     "http://127.0.0.1:5500",
     "http://localhost:5500",
     "http://127.0.0.1:5501",
     "http://localhost:5501",
+    "https://englishbuddy-for-me.vercel.app",
 )
 _configured_origins = os.getenv("FRONTEND_ORIGINS")
 
 if _configured_origins is None:
-    FRONTEND_ORIGINS = list(_LOCAL_FRONTEND_ORIGINS)
+    FRONTEND_ORIGINS = list(_DEFAULT_FRONTEND_ORIGINS)
 else:
     FRONTEND_ORIGINS = list(
         dict.fromkeys(
