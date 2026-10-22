@@ -27,8 +27,7 @@ class User(Base):
 
     queue_entry = relationship(
         "MatchingQueue",
-        back_populates="user",
-        uselist=False
+        back_populates="user"
     )
 
     conversation_participants = relationship(

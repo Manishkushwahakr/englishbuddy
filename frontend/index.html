@@ -127,13 +127,21 @@
 
       <div class="call-grid">
         <div class="panel call-panel">
-          <div class="avatar">👋</div>
+          <div class="session-icon" aria-hidden="true">
+            <span class="avatar">👋</span>
+          </div>
+          <div class="audio-wave" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span>
+          </div>
           <h2>Your speaking session</h2>
           <p class="muted">Audio-only conversation</p>
           <div class="call-controls">
             <button id="mute-btn" class="btn btn-outline" type="button">Mute microphone</button>
+            <button id="skip-partner-btn" class="btn btn-outline" type="button">Skip Partner</button>
             <button id="end-call-btn" class="btn btn-danger" type="button">End call</button>
           </div>
+          <p id="skip-limit-message" class="muted small hidden" aria-live="polite"></p>
           <audio id="remote-audio" autoplay playsinline controls></audio>
         </div>
 

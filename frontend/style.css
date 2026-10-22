@@ -258,8 +258,121 @@ main {
 
 .illustration,
 .avatar {
-  margin-bottom: 14px;
   font-size: 36px;
+}
+
+.illustration {
+  margin-bottom: 14px;
+}
+
+.session-icon {
+  position: relative;
+  display: grid;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 6px;
+  place-items: center;
+}
+
+.session-icon::before {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(91, 92, 226, 0.16);
+  border-radius: 50%;
+  content: "";
+  opacity: 0;
+  transform: scale(0.92);
+}
+
+.avatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  place-items: center;
+  line-height: 1;
+}
+
+.audio-wave {
+  display: flex;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin: 0 auto 10px;
+}
+
+.audio-wave span {
+  width: 3px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--primary);
+  transform: scaleY(0.7);
+  transform-origin: center;
+}
+
+.audio-wave span:nth-child(2),
+.audio-wave span:nth-child(6) {
+  height: 10px;
+}
+
+.audio-wave span:nth-child(3),
+.audio-wave span:nth-child(5) {
+  height: 14px;
+}
+
+.audio-wave span:nth-child(4) {
+  height: 17px;
+}
+
+.call-panel.is-connected .session-icon::before {
+  animation: session-ring 3.2s ease-out infinite;
+}
+
+.call-panel.is-connected .audio-wave span {
+  animation: audio-wave-idle 1.7s ease-in-out infinite alternate;
+}
+
+.call-panel.is-connected .audio-wave span:nth-child(2),
+.call-panel.is-connected .audio-wave span:nth-child(6) {
+  animation-delay: 0.25s;
+}
+
+.call-panel.is-connected .audio-wave span:nth-child(3),
+.call-panel.is-connected .audio-wave span:nth-child(5) {
+  animation-delay: 0.5s;
+}
+
+.call-panel.is-connected .audio-wave span:nth-child(4) {
+  animation-delay: 0.75s;
+}
+
+@keyframes session-ring {
+  0% {
+    opacity: 0.2;
+    transform: scale(0.94);
+  }
+  75%,
+  100% {
+    opacity: 0;
+    transform: scale(1.16);
+  }
+}
+
+@keyframes audio-wave-idle {
+  from {
+    transform: scaleY(0.55);
+  }
+  to {
+    transform: scaleY(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-panel.is-connected .session-icon::before,
+  .call-panel.is-connected .audio-wave span {
+    animation: none;
+  }
 }
 
 .info-row {
@@ -317,6 +430,11 @@ main {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.call-controls {
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .transcript-list {

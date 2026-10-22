@@ -23,6 +23,13 @@ variables in Render's dashboard:
 | `DATABASE_URL` | The database's internal PostgreSQL connection URL |
 | `SECRET_KEY` | A newly generated, long, random signing key; keep it private |
 | `FRONTEND_ORIGINS` | `https://englishbuddy-for-me.vercel.app` (plus any exact custom domain, comma-separated) |
+| `MATCHING_FALLBACK_WAIT_SECONDS` | Optional; defaults to `9` before adjacent English levels can match |
+| `MATCHING_REPEAT_COOLDOWN_SECONDS` | Optional; defaults to `600` seconds before recently paired users can match again if alternatives exist |
+
+Each user may complete up to five successful partner skips in a rolling
+30-minute window. The limit is enforced using existing matching queue history,
+so it requires no database schema migration. A rejected or duplicate skip does
+not consume a skip.
 
 Set `FRONTEND_ORIGINS` to the exact production deployment origin
 `https://englishbuddy-for-me.vercel.app`. Add a custom domain or a specific

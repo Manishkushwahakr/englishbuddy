@@ -2,6 +2,8 @@
 import asyncio
 import base64
 import binascii
+from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -9,6 +11,10 @@ from jose import jwt, JWTError
 
 from app.config import SECRET_KEY
 from app.auth.security import ALGORITHM
+from app.database import SessionLocal
+from app.models.conversation import Conversation
+from app.models.conversation_participant import ConversationParticipant
+from app.models.matching_queue import MatchingQueue
 from app.services.stt import transcribe_audio
 
 router = APIRouter(tags=["WebSocket"])
@@ -88,6 +94,46 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+def mark_conversation_ended(conversation_id: str, user_id: str):
+    db = SessionLocal()
+    try:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.id == UUID(conversation_id),
+                Conversation.status == "matched"
+            )
+            .with_for_update()
+            .first()
+        )
+        if conversation is None:
+            return
+
+        participants = (
+            db.query(ConversationParticipant.user_id)
+            .filter(
+                ConversationParticipant.conversation_id == conversation.id
+            )
+            .all()
+        )
+        participant_ids = {row[0] for row in participants}
+        if UUID(user_id) not in participant_ids:
+            return
+
+        conversation.status = "ended"
+        conversation.ended_at = datetime.now(timezone.utc)
+        db.query(MatchingQueue).filter(
+            MatchingQueue.user_id.in_(participant_ids),
+            MatchingQueue.status == "matched"
+        ).update({"status": "ended"}, synchronize_session=False)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @router.websocket("/ws/conversation/{conversation_id}")
@@ -232,6 +278,17 @@ async def conversation_websocket(
 
     finally:
         manager.disconnect(websocket, conversation_id)
+        try:
+            await asyncio.to_thread(
+                mark_conversation_ended,
+                conversation_id,
+                user_id
+            )
+        except Exception as error:
+            print(
+                f"Could not end conversation {conversation_id} after "
+                f"user {user_id} disconnected: {error}"
+            )
 
         # Notify remaining users without sending to dead sockets.
         await manager.send_to_room(

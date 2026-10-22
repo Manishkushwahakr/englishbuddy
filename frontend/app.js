@@ -86,12 +86,14 @@ async function apiRequest(path, options = {}) {
     }
 
     const detail = data.detail;
-    const message =
+    const error = new Error(
       typeof detail === "string"
         ? detail
-        : `Request failed (${response.status})`;
-
-    throw new Error(message);
+        : detail?.message || `Request failed (${response.status})`
+    );
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
 
   return data;
@@ -258,18 +260,73 @@ const matchingMessage = document.getElementById("matching-message");
 const cancelMatchingButton = document.getElementById("cancel-matching-btn");
 const matchingLoader = document.querySelector("#matching-view .loader");
 const callStatus = document.getElementById("call-status");
+const callPanel = document.querySelector(".call-panel");
 const startCallButton = document.getElementById("start-call-btn");
 const endCallButton = document.getElementById("end-call-btn");
+const skipPartnerButton = document.getElementById("skip-partner-btn");
+const skipLimitMessage = document.getElementById("skip-limit-message");
 const muteButton = document.getElementById("mute-btn");
 const remoteAudio = document.getElementById("remote-audio");
 const MATCHING_POLL_INTERVAL = 2000;
 let matchingPollTimer = null;
 let matchingFlowId = 0;
+let matchingStartedAt = 0;
+let matchingFallbackAfterSeconds = 9;
 let activeMatch = null;
 let callSession = null;
 let callSocket = null;
 let peerConnection = null;
 let localAudioStream = null;
+let skipLimitTimer = null;
+
+function clearSkipLimitTimer() {
+  if (skipLimitTimer !== null) {
+    clearTimeout(skipLimitTimer);
+    skipLimitTimer = null;
+  }
+}
+
+function setSkipAvailability(remaining, retryAfterSeconds) {
+  clearSkipLimitTimer();
+  const limitReached = remaining <= 0;
+  skipPartnerButton.disabled = limitReached;
+  skipPartnerButton.textContent = limitReached ? "Skip unavailable" : "Skip Partner";
+  skipLimitMessage.classList.toggle("hidden", !limitReached);
+
+  if (!limitReached) {
+    skipLimitMessage.textContent = "";
+    return;
+  }
+
+  const minutes = Math.ceil(retryAfterSeconds / 60);
+  const remainingTime = retryAfterSeconds < 60
+    ? `${retryAfterSeconds} second${retryAfterSeconds === 1 ? "" : "s"}`
+    : `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  skipLimitMessage.textContent =
+    `Skip limit reached. You can skip again in about ${remainingTime}.`;
+  skipLimitTimer = setTimeout(() => {
+    if (activeMatch) refreshSkipAvailability(activeMatch);
+  }, Math.max(1, retryAfterSeconds) * 1000);
+}
+
+async function refreshSkipAvailability(match) {
+  try {
+    const availability = await apiRequest("/matching/skip-status");
+    if (activeMatch !== match) return;
+    setSkipAvailability(
+      availability.skips_remaining,
+      availability.retry_after_seconds ?? 0
+    );
+  } catch (error) {
+    if (activeMatch !== match) return;
+    if (error.sessionExpired) {
+      showView("auth-view");
+      showNotice(error.message, "error");
+      return;
+    }
+    console.warn("Could not load skip availability:", error.message);
+  }
+}
 
 function stopMatchingPolling() {
   if (matchingPollTimer !== null) {
@@ -288,8 +345,10 @@ function showMatchedPartner(match) {
     `Matched with ${partnerLabel}` +
     `${match.partner_email ? ` (${match.partner_email})` : ""}.`;
   cancelMatchingButton.classList.add("hidden");
+  setSkipAvailability(1, 0);
   callStatus.textContent = `Partner found: ${partnerLabel}. Connecting to the audio call...`;
   showView("call-view");
+  refreshSkipAvailability(match);
   startCall(match);
 }
 
@@ -307,6 +366,7 @@ function updateCallStatus(message) {
 }
 
 function cleanupCall() {
+  clearSkipLimitTimer();
   const socket = callSocket;
   const connection = peerConnection;
   const stream = localAudioStream;
@@ -347,6 +407,7 @@ function cleanupCall() {
   }
 
   remoteAudio.srcObject = null;
+  callPanel.classList.remove("is-connected");
   muteButton.disabled = true;
   muteButton.textContent = "Mute microphone";
   startCallButton.classList.add("hidden");
@@ -445,8 +506,13 @@ function createCallPeerConnection(session) {
     if (session !== callSession) return;
 
     if (connection.connectionState === "connected") {
+      callPanel.classList.add("is-connected");
       updateCallStatus("Audio call connected.");
-    } else if (connection.connectionState === "connecting") {
+    } else {
+      callPanel.classList.remove("is-connected");
+    }
+
+    if (connection.connectionState === "connecting") {
       updateCallStatus("Negotiating the audio connection...");
     } else if (connection.connectionState === "disconnected") {
       updateCallStatus(
@@ -724,10 +790,78 @@ muteButton.addEventListener("click", () => {
   updateCallStatus(enabled ? "Microphone muted." : "Microphone unmuted.");
 });
 
-endCallButton.addEventListener("click", () => {
+endCallButton.addEventListener("click", async () => {
+  const conversationId = activeMatch?.conversation_id;
   cleanupCall();
+  activeMatch = null;
   showView("dashboard-view");
   showNotice("Call ended.", "success");
+
+  if (!conversationId) return;
+
+  try {
+    await apiRequest("/matching/end", {
+      method: "POST",
+      body: JSON.stringify({ conversation_id: conversationId }),
+    });
+  } catch (error) {
+    showNotice(
+      `The call ended on this device, but the server could not update the matching state: ${error.message}`,
+      "error"
+    );
+  }
+});
+
+skipPartnerButton.addEventListener("click", async () => {
+  if (!activeMatch || skipPartnerButton.disabled) return;
+
+  const conversationId = activeMatch.conversation_id;
+  const match = activeMatch;
+  const flowId = ++matchingFlowId;
+  stopMatchingPolling();
+  skipPartnerButton.disabled = true;
+  updateCallStatus("Skipping partner...");
+  cleanupCall();
+  activeMatch = null;
+
+  matchingTitle.textContent = "Skipping partner...";
+  matchingMessage.textContent = "Closing the audio connection before searching again.";
+  matchingLoader.classList.remove("hidden");
+  cancelMatchingButton.classList.remove("hidden");
+  cancelMatchingButton.disabled = true;
+  showView("matching-view");
+
+  try {
+    const result = await apiRequest("/matching/skip", {
+      method: "POST",
+      body: JSON.stringify({ conversation_id: conversationId }),
+    });
+    if (flowId !== matchingFlowId) return;
+
+    matchingStartedAt = Date.now();
+    matchingFallbackAfterSeconds = result.fallback_after_seconds ?? 9;
+    cancelMatchingButton.disabled = false;
+    matchingTitle.textContent = "Searching for another partner...";
+    matchingMessage.textContent = "Finding your next partner...";
+    pollForMatch(flowId);
+  } catch (error) {
+    if (flowId !== matchingFlowId) return;
+    if (error.sessionExpired) {
+      showView("auth-view");
+      showNotice(error.message, "error");
+      return;
+    }
+    activeMatch = match;
+    showView("call-view");
+    callStatus.textContent = error.message || "Skip failed. Your call is being restored.";
+    if (error.status === 429) {
+      const retryAfter = error.data?.detail?.retry_after_seconds ?? 60;
+      setSkipAvailability(0, retryAfter);
+    } else {
+      setSkipAvailability(1, 0);
+    }
+    startCall(match);
+  }
 });
 
 window.addEventListener("pagehide", cleanupCall);
@@ -761,8 +895,18 @@ async function pollForMatch(flowId) {
     }
 
     matchingLoader.classList.remove("hidden");
-    matchingTitle.textContent = "Searching for a partner...";
-    matchingMessage.textContent = "Keep this page open. We’ll notify you as soon as a learner at your level is found.";
+    const fallbackReady =
+      Date.now() - matchingStartedAt >= matchingFallbackAfterSeconds * 1000;
+    matchingTitle.textContent = result.fallback_available
+      ? "Searching nearby English levels..."
+      : fallbackReady
+        ? "No alternative partner available yet"
+        : "Searching for a partner...";
+    matchingMessage.textContent = result.fallback_available
+      ? "No same-level partner was ready, so we’re checking adjacent levels."
+      : fallbackReady
+        ? "No eligible alternative is available right now. We’ll keep searching and match you when one is ready."
+        : `Looking for the same English level first. Nearby levels become available after ${matchingFallbackAfterSeconds} seconds.`;
     matchingPollTimer = setTimeout(() => pollForMatch(flowId), MATCHING_POLL_INTERVAL);
   } catch (error) {
     if (flowId !== matchingFlowId) return;
@@ -787,6 +931,8 @@ practiceForm.addEventListener("submit", (event) => {
   const flowId = ++matchingFlowId;
   stopMatchingPolling();
   activeMatch = null;
+  matchingStartedAt = Date.now();
+  matchingFallbackAfterSeconds = 9;
   matchingTitle.textContent = "Joining the queue...";
   matchingMessage.textContent = "We’re getting your practice search ready.";
   matchingLoader.classList.remove("hidden");
@@ -803,6 +949,8 @@ practiceForm.addEventListener("submit", (event) => {
     if (flowId !== matchingFlowId) return;
 
     cancelMatchingButton.disabled = false;
+    matchingStartedAt = Date.now();
+    matchingFallbackAfterSeconds = result.fallback_after_seconds ?? 9;
     matchingTitle.textContent =
       result.status === "matched"
         ? "Checking your existing match..."

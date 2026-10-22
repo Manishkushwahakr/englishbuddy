@@ -14,6 +14,18 @@ if not DATABASE_URL:
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY is not set")
 
+MATCHING_FALLBACK_WAIT_SECONDS = int(
+    os.getenv("MATCHING_FALLBACK_WAIT_SECONDS", "9")
+)
+if MATCHING_FALLBACK_WAIT_SECONDS < 0:
+    raise ValueError("MATCHING_FALLBACK_WAIT_SECONDS cannot be negative")
+
+MATCHING_REPEAT_COOLDOWN_SECONDS = int(
+    os.getenv("MATCHING_REPEAT_COOLDOWN_SECONDS", "600")
+)
+if MATCHING_REPEAT_COOLDOWN_SECONDS < 0:
+    raise ValueError("MATCHING_REPEAT_COOLDOWN_SECONDS cannot be negative")
+
 _DEFAULT_FRONTEND_ORIGINS = (
     "http://127.0.0.1:5500",
     "http://localhost:5500",
