@@ -267,6 +267,9 @@ const skipPartnerButton = document.getElementById("skip-partner-btn");
 const skipLimitMessage = document.getElementById("skip-limit-message");
 const muteButton = document.getElementById("mute-btn");
 const remoteAudio = document.getElementById("remote-audio");
+const transcriptStatus = document.getElementById("transcript-status");
+const transcriptInterim = document.getElementById("transcript-interim");
+const transcriptList = document.getElementById("transcript-list");
 const MATCHING_POLL_INTERVAL = 2000;
 let matchingPollTimer = null;
 let matchingFlowId = 0;
@@ -278,6 +281,401 @@ let callSocket = null;
 let peerConnection = null;
 let localAudioStream = null;
 let skipLimitTimer = null;
+
+function setTranscriptStatus(message) {
+  transcriptStatus.textContent = message;
+}
+
+function clearPrivateTranscript() {
+  transcriptList.replaceChildren();
+  const emptyMessage = document.createElement("p");
+  emptyMessage.id = "transcript-empty";
+  emptyMessage.className = "muted empty-state";
+  emptyMessage.textContent =
+    "Your private transcript will appear here when speech is recognized.";
+  transcriptList.append(emptyMessage);
+  transcriptInterim.textContent = "";
+}
+
+function appendPrivateTranscript(text) {
+  if (!text) return;
+  document.getElementById("transcript-empty")?.remove();
+  const entry = document.createElement("p");
+  entry.className = "transcript-entry";
+  entry.textContent = text;
+  transcriptList.append(entry);
+
+  while (transcriptList.children.length > 200) {
+    transcriptList.firstElementChild?.remove();
+  }
+}
+
+function speechRecognitionConstructor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function createTranscriptionStreamId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  if (!window.crypto?.getRandomValues) return null;
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function startBrowserSpeechRecognition(session) {
+  if (
+    session !== callSession ||
+    !session.callConnected ||
+    !localAudioStream?.getAudioTracks().some((track) => track.enabled)
+  ) {
+    return;
+  }
+
+  const SpeechRecognition = speechRecognitionConstructor();
+  if (!SpeechRecognition) {
+    setTranscriptStatus(
+      "Live browser transcription is not supported in this browser. Server transcription may still be available."
+    );
+    return;
+  }
+
+  if (!session.speechRecognition) {
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    session.speechRecognition = recognition;
+
+    recognition.onstart = () => {
+      if (session === callSession) {
+        setTranscriptStatus("Private browser transcription is active on this device.");
+      }
+    };
+
+    recognition.onresult = (event) => {
+      if (session !== callSession) return;
+      let interim = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const text = result[0]?.transcript?.trim();
+        if (!text) continue;
+        if (result.isFinal) {
+          appendPrivateTranscript(text);
+        } else {
+          interim += `${text} `;
+        }
+      }
+      transcriptInterim.textContent = interim.trim();
+    };
+
+    recognition.onerror = (event) => {
+      if (session !== callSession) return;
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        session.speechRecognitionActive = false;
+        setTranscriptStatus(
+          "Browser transcription permission was denied. The audio call can continue."
+        );
+      } else if (event.error !== "no-speech" && event.error !== "aborted") {
+        session.speechRecognitionActive = false;
+        setTranscriptStatus(
+          `Browser transcription is unavailable (${event.error}). The audio call can continue.`
+        );
+      }
+    };
+
+    recognition.onend = () => {
+      if (session !== callSession || !session.speechRecognitionActive) return;
+      session.speechRestartTimer = setTimeout(() => {
+        if (
+          session === callSession &&
+          session.speechRecognitionActive &&
+          session.speechRecognition === recognition
+        ) {
+          try {
+            recognition.start();
+          } catch (error) {
+            if (error.name !== "InvalidStateError") {
+              setTranscriptStatus(`Browser transcription could not restart: ${error.message}`);
+            }
+          }
+        }
+      }, 250);
+    };
+  }
+
+  session.speechRecognitionActive = true;
+  try {
+    session.speechRecognition.start();
+  } catch (error) {
+    if (error.name !== "InvalidStateError") {
+      session.speechRecognitionActive = false;
+      setTranscriptStatus(`Browser transcription could not start: ${error.message}`);
+    }
+  }
+}
+
+function stopBrowserSpeechRecognition(session) {
+  session.speechRecognitionActive = false;
+  clearTimeout(session.speechRestartTimer);
+  session.speechRestartTimer = null;
+  if (session.speechRecognition) {
+    session.speechRecognition.onstart = null;
+    session.speechRecognition.onresult = null;
+    session.speechRecognition.onerror = null;
+    session.speechRecognition.onend = null;
+    try {
+      session.speechRecognition.abort();
+    } catch (error) {
+      console.warn("Could not stop browser speech recognition:", error.message);
+    }
+    session.speechRecognition = null;
+  }
+  transcriptInterim.textContent = "";
+}
+
+function resampleTo16k(samples, sourceRate) {
+  const ratio = sourceRate / 16000;
+  const outputLength = Math.floor(samples.length / ratio);
+  const output = new Int16Array(outputLength);
+
+  for (let index = 0; index < outputLength; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(samples.length, Math.floor((index + 1) * ratio));
+    let sum = 0;
+    for (let sourceIndex = start; sourceIndex < end; sourceIndex += 1) {
+      sum += samples[sourceIndex];
+    }
+    const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)));
+    output[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+function createWavBuffer(samples) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeAscii = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeAscii(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeAscii(8, "WAVE");
+  writeAscii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true);
+  view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  samples.forEach((sample, index) => view.setInt16(44 + index * 2, sample, true));
+  return buffer;
+}
+
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const blockSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += blockSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + blockSize));
+  }
+  return btoa(binary);
+}
+
+function sendAudioChunk(session, audioSamples, sourceRate) {
+  const socket = session.transcriptionSocket;
+  if (
+    session !== callSession ||
+    !session.callConnected ||
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    !localAudioStream?.getAudioTracks().some((track) => track.enabled)
+  ) {
+    audioSamples.fill(0);
+    return;
+  }
+  if (session.serverChunkPendingSequence !== null) {
+    setTranscriptStatus("Server transcription is still processing; this chunk was skipped to avoid buffering.");
+    audioSamples.fill(0);
+    return;
+  }
+  if (socket.bufferedAmount > 500_000) {
+    setTranscriptStatus("Server transcription is busy; a chunk was skipped to keep the call responsive.");
+    audioSamples.fill(0);
+    return;
+  }
+
+  let pcmSamples;
+  let wav;
+  let message = null;
+  let serialized = "";
+  try {
+    pcmSamples = resampleTo16k(audioSamples, sourceRate);
+    wav = createWavBuffer(pcmSamples);
+    if (wav.byteLength > 256 * 1024) {
+      setTranscriptStatus("A server transcription chunk exceeded the size limit and was discarded.");
+      return;
+    }
+
+    const sequence = session.transcriptionSequence++;
+    message = {
+      type: "audio_chunk",
+      stream_id: session.transcriptionStreamId,
+      sequence,
+      captured_at: new Date().toISOString(),
+      audio: bufferToBase64(wav),
+    };
+    session.serverChunkPendingSequence = sequence;
+    serialized = JSON.stringify(message);
+    socket.send(serialized);
+    setTranscriptStatus("Private server transcription is processing an audio chunk.");
+  } catch (error) {
+    session.serverChunkPendingSequence = null;
+    setTranscriptStatus(`Server transcription could not send an audio chunk: ${error.message}`);
+  } finally {
+    audioSamples.fill(0);
+    pcmSamples?.fill(0);
+    if (wav) new Uint8Array(wav).fill(0);
+    if (message) message.audio = "";
+    serialized = "";
+  }
+}
+
+async function startAudioChunkCapture(session) {
+  if (
+    session !== callSession ||
+    !session.callConnected ||
+    !session.transcriptionReady ||
+    session.audioChunkCaptureStarted ||
+    !localAudioStream?.getAudioTracks().some((track) => track.enabled)
+  ) {
+    return;
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (
+    !AudioContextClass ||
+    typeof AudioWorkletNode === "undefined" ||
+    !session.transcriptionStreamId
+  ) {
+    setTranscriptStatus(
+      "This browser does not support server transcription. Private browser transcription may still work."
+    );
+    return;
+  }
+
+  session.audioChunkCaptureStarted = true;
+  try {
+    const context = new AudioContextClass();
+    session.audioContext = context;
+    await context.audioWorklet.addModule("audio-chunk-processor.js");
+    if (session !== callSession) {
+      await context.close();
+      return;
+    }
+
+    const source = context.createMediaStreamSource(localAudioStream);
+    const worklet = new AudioWorkletNode(context, "improbuddy-audio-chunk", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: "explicit",
+    });
+    const silentOutput = context.createGain();
+    silentOutput.gain.value = 0;
+    source.connect(worklet);
+    worklet.connect(silentOutput);
+    silentOutput.connect(context.destination);
+    worklet.port.onmessage = (event) => {
+      if (!(event.data?.samples instanceof ArrayBuffer)) {
+        return;
+      }
+      const audioSamples = new Float32Array(event.data.samples);
+      if (session !== callSession || !Number.isFinite(event.data.sampleRate)) {
+        audioSamples.fill(0);
+        return;
+      }
+      sendAudioChunk(
+        session,
+        audioSamples,
+        event.data.sampleRate
+      );
+    };
+
+    session.audioSource = source;
+    session.audioWorklet = worklet;
+    session.silentOutput = silentOutput;
+    await context.resume();
+    if (context.state !== "running") {
+      throw new Error("The audio processor could not start.");
+    }
+    setTranscriptStatus("Server-side Faster-Whisper transcription is active for this call.");
+  } catch (error) {
+    session.audioChunkCaptureStarted = false;
+    if (session !== callSession) return;
+    setTranscriptStatus(
+      `Server transcription is unavailable: ${error.message}. The audio call can continue.`
+    );
+    if (session.audioContext && session.audioContext.state !== "closed") {
+      await session.audioContext.close().catch((closeError) => {
+        console.warn("Could not close the transcription audio context:", closeError.message);
+      });
+    }
+    session.audioContext = null;
+  }
+}
+
+function closeAudioChunkCapture(session) {
+  session.audioChunkCaptureStarted = false;
+  if (session.audioWorklet) {
+    session.audioWorklet.port.onmessage = null;
+    session.audioWorklet.disconnect();
+    session.audioWorklet = null;
+  }
+  session.audioSource?.disconnect();
+  session.audioSource = null;
+  session.silentOutput?.disconnect();
+  session.silentOutput = null;
+  if (session.audioContext && session.audioContext.state !== "closed") {
+    session.audioContext.close().catch((error) => {
+      console.warn("Could not close the transcription audio context:", error.message);
+    });
+  }
+  session.audioContext = null;
+}
+
+function startCallTranscription(session) {
+  if (session !== callSession || !session.callConnected) return;
+  if (
+    session.transcriptionSpeakerId &&
+    session.userId &&
+    session.transcriptionSpeakerId !== session.userId
+  ) {
+    session.transcriptionReady = false;
+    setTranscriptStatus("The transcription connection authenticated a different speaker.");
+    return;
+  }
+  startBrowserSpeechRecognition(session);
+  startAudioChunkCapture(session);
+}
+
+function createCallSocketUrl(conversationId, suffix = "") {
+  const backend = new URL(API_BASE);
+  backend.protocol = backend.protocol === "https:" ? "wss:" : "ws:";
+  const socketUrl = new URL(
+    `${backend.protocol}//${backend.host}/ws/conversation/${encodeURIComponent(conversationId)}${suffix}`
+  );
+  socketUrl.searchParams.set("token", getToken());
+  return socketUrl.toString();
+}
 
 function clearSkipLimitTimer() {
   if (skipLimitTimer !== null) {
@@ -372,6 +770,22 @@ function cleanupCall() {
   const stream = localAudioStream;
   const session = callSession;
 
+  if (session) {
+    stopBrowserSpeechRecognition(session);
+    closeAudioChunkCapture(session);
+    const transcriptionSocket = session.transcriptionSocket;
+    if (transcriptionSocket) {
+      transcriptionSocket.onopen = null;
+      transcriptionSocket.onmessage = null;
+      transcriptionSocket.onerror = null;
+      transcriptionSocket.onclose = null;
+      if (transcriptionSocket.readyState < WebSocket.CLOSING) {
+        transcriptionSocket.close(1000, "Call ended");
+      }
+    }
+  }
+  clearPrivateTranscript();
+
   callSession = null;
   callSocket = null;
   peerConnection = null;
@@ -441,6 +855,7 @@ function startMicrophone(session) {
       session.microphoneError = null;
       muteButton.disabled = false;
       startCallButton.classList.add("hidden");
+      setTranscriptStatus("Microphone ready. Waiting for the audio call to connect.");
       maybeStartCallNegotiation(session);
       if (session.pendingOffer) {
         const pendingOffer = session.pendingOffer;
@@ -462,6 +877,7 @@ function startMicrophone(session) {
             ? "No microphone was found. Connect a microphone and retry."
             : `Could not access the microphone: ${error.message}`;
       session.microphoneError = message;
+      setTranscriptStatus(`${message} Transcription is unavailable until microphone access is granted.`);
       updateCallStatus(
         callSocket?.readyState === WebSocket.OPEN
           ? `${message} Signaling is connected; retry microphone access to continue.`
@@ -508,8 +924,16 @@ function createCallPeerConnection(session) {
     if (connection.connectionState === "connected") {
       callPanel.classList.add("is-connected");
       updateCallStatus("Audio call connected.");
+      session.callConnected = true;
+      startCallTranscription(session);
     } else {
       callPanel.classList.remove("is-connected");
+      if (connection.connectionState === "disconnected" || connection.connectionState === "failed" || connection.connectionState === "closed") {
+        session.callConnected = false;
+        stopBrowserSpeechRecognition(session);
+        closeAudioChunkCapture(session);
+        setTranscriptStatus("Transcription paused because the audio call is disconnected.");
+      }
     }
 
     if (connection.connectionState === "connecting") {
@@ -685,8 +1109,24 @@ function startCall(match) {
     pendingOffer: null,
     microphoneError: null,
     pendingCandidates: [],
+    callConnected: false,
+    transcriptionReady: false,
+    transcriptionSequence: 0,
+    transcriptionStreamId: createTranscriptionStreamId(),
+    audioChunkCaptureStarted: false,
+    serverChunkPendingSequence: null,
+    transcriptionSocket: null,
+    speechRecognition: null,
+    speechRecognitionActive: false,
+    speechRestartTimer: null,
+    audioContext: null,
+    audioSource: null,
+    audioWorklet: null,
+    silentOutput: null,
   };
   callSession = session;
+  clearPrivateTranscript();
+  setTranscriptStatus("Waiting for the call and transcription channels to connect.");
   startCallButton.textContent = "Enable microphone and start audio";
   startCallButton.classList.add("hidden");
   muteButton.disabled = true;
@@ -694,12 +1134,7 @@ function startCall(match) {
 
   let signalingUrl;
   try {
-    const backend = new URL(API_BASE);
-    backend.protocol = backend.protocol === "https:" ? "wss:" : "ws:";
-    signalingUrl = new URL(
-      `${backend.protocol}//${backend.host}/ws/conversation/${encodeURIComponent(match.conversation_id)}`
-    );
-    signalingUrl.searchParams.set("token", getToken());
+    signalingUrl = new URL(createCallSocketUrl(match.conversation_id));
     callSocket = new WebSocket(signalingUrl.toString());
   } catch (error) {
     updateCallStatus(`Could not open call signaling: ${error.message}`);
@@ -708,6 +1143,64 @@ function startCall(match) {
   }
 
   const socket = callSocket;
+  try {
+    session.transcriptionSocket = new WebSocket(
+      createCallSocketUrl(match.conversation_id, "/transcription")
+    );
+    session.transcriptionSocket.onmessage = (event) => {
+      if (session !== callSession) return;
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch (error) {
+        console.error("Invalid transcription response:", error);
+        setTranscriptStatus("The server returned an invalid transcription response.");
+        return;
+      }
+
+      if (
+        message.type === "transcription_ready" &&
+        message.conversation_id === match.conversation_id
+      ) {
+        session.transcriptionSpeakerId = message.speaker_id;
+        session.transcriptionReady = true;
+        if (session.userId && session.transcriptionSpeakerId !== session.userId) {
+          setTranscriptStatus("The transcription connection authenticated a different speaker.");
+          session.transcriptionReady = false;
+        } else {
+          startAudioChunkCapture(session);
+        }
+      } else if (message.type === "stt_error") {
+        if (message.sequence === session.serverChunkPendingSequence) {
+          session.serverChunkPendingSequence = null;
+        }
+        setTranscriptStatus(message.message || "Server transcription failed for an audio chunk.");
+      } else if (
+        (message.type === "transcription_result" || message.type === "chunk_duplicate") &&
+        message.sequence === session.serverChunkPendingSequence
+      ) {
+        session.serverChunkPendingSequence = null;
+      }
+    };
+    session.transcriptionSocket.onerror = () => {
+      if (session === callSession) {
+        setTranscriptStatus("Server transcription is unavailable; the audio call can continue.");
+      }
+    };
+    session.transcriptionSocket.onclose = (event) => {
+      if (session === callSession && event.code !== 1000) {
+        session.transcriptionReady = false;
+        setTranscriptStatus(
+          "The server transcription channel disconnected. The audio call can continue."
+        );
+      }
+    };
+  } catch (error) {
+    setTranscriptStatus(
+      `Could not open server transcription: ${error.message}. Browser transcription may still work.`
+    );
+  }
+
   socket.onopen = () => {
     if (session !== callSession) return;
     updateCallStatus(
@@ -735,6 +1228,15 @@ function startCall(match) {
       }
       session.userId = String(message.user_id);
       session.polite = session.userId.localeCompare(match.partner_id) > 0;
+      if (
+        session.transcriptionSpeakerId &&
+        session.transcriptionSpeakerId !== session.userId
+      ) {
+        session.transcriptionReady = false;
+        session.transcriptionSocket?.close(1008, "Speaker identity mismatch");
+        setTranscriptStatus("The transcription connection authenticated a different speaker.");
+      }
+      startAudioChunkCapture(session);
       const announceReady = () => {
         if (session !== callSession || session.partnerReady) {
           clearInterval(session.readyTimer);
@@ -787,6 +1289,22 @@ muteButton.addEventListener("click", () => {
     track.enabled = !enabled;
   });
   muteButton.textContent = enabled ? "Unmute microphone" : "Mute microphone";
+  if (enabled) {
+    stopBrowserSpeechRecognition(callSession);
+    callSession?.audioContext?.suspend().catch((error) => {
+      console.warn("Could not pause server transcription:", error.message);
+    });
+    setTranscriptStatus("Transcription paused while your microphone is muted.");
+  } else if (callSession) {
+    startBrowserSpeechRecognition(callSession);
+    if (callSession.audioContext) {
+      callSession.audioContext.resume().catch((error) => {
+        setTranscriptStatus(`Server transcription could not resume: ${error.message}`);
+      });
+    } else {
+      startAudioChunkCapture(callSession);
+    }
+  }
   updateCallStatus(enabled ? "Microphone muted." : "Microphone unmuted.");
 });
 
@@ -821,46 +1339,39 @@ skipPartnerButton.addEventListener("click", async () => {
   stopMatchingPolling();
   skipPartnerButton.disabled = true;
   updateCallStatus("Skipping partner...");
-  cleanupCall();
-  activeMatch = null;
-
-  matchingTitle.textContent = "Skipping partner...";
-  matchingMessage.textContent = "Closing the audio connection before searching again.";
-  matchingLoader.classList.remove("hidden");
-  cancelMatchingButton.classList.remove("hidden");
-  cancelMatchingButton.disabled = true;
-  showView("matching-view");
 
   try {
     const result = await apiRequest("/matching/skip", {
       method: "POST",
       body: JSON.stringify({ conversation_id: conversationId }),
     });
-    if (flowId !== matchingFlowId) return;
+    if (flowId !== matchingFlowId || activeMatch !== match) return;
 
+    cleanupCall();
+    activeMatch = null;
     matchingStartedAt = Date.now();
     matchingFallbackAfterSeconds = result.fallback_after_seconds ?? 9;
-    cancelMatchingButton.disabled = false;
+    matchingLoader.classList.remove("hidden");
     matchingTitle.textContent = "Searching for another partner...";
     matchingMessage.textContent = "Finding your next partner...";
+    cancelMatchingButton.disabled = false;
+    cancelMatchingButton.classList.remove("hidden");
+    showView("matching-view");
     pollForMatch(flowId);
   } catch (error) {
-    if (flowId !== matchingFlowId) return;
+    if (flowId !== matchingFlowId || activeMatch !== match) return;
     if (error.sessionExpired) {
+      activeMatch = null;
       showView("auth-view");
       showNotice(error.message, "error");
       return;
     }
-    activeMatch = match;
-    showView("call-view");
+    skipPartnerButton.disabled = false;
     callStatus.textContent = error.message || "Skip failed. Your call is being restored.";
     if (error.status === 429) {
       const retryAfter = error.data?.detail?.retry_after_seconds ?? 60;
       setSkipAvailability(0, retryAfter);
-    } else {
-      setSkipAvailability(1, 0);
     }
-    startCall(match);
   }
 });
 

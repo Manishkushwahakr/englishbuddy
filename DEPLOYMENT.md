@@ -91,6 +91,39 @@ reliable cross-network production calls generally need a TURN service and
 short-lived credentials. Browser microphone access requires HTTPS, which
 Vercel provides.
 
+### Transcription privacy and runtime
+
+WebRTC voice remains peer-to-peer. The frontend separately sends bounded,
+five-second mono PCM/WAV chunks over
+`/ws/conversation/{conversation_id}/transcription`; the signaling socket remains
+for WebRTC messages. The server verifies the JWT and active conversation
+membership and derives the speaker ID from that JWT. It accepts at most 256 KiB
+and eight seconds per chunk, and processes at most one Faster-Whisper chunk at
+a time per backend process. Busy or malformed chunks are discarded rather than
+queued.
+
+Audio is held temporarily in process memory while Faster-Whisper runs. It is
+not written to files, the database, logs, or an application queue/cache. The
+speaker-labelled Faster-Whisper transcript is retained only in bounded process
+memory (up to 720 chunks / 120,000 characters per conversation) and cleared
+when the conversation ends, is skipped, or the signaling connection closes.
+Process restarts also clear it. There is no transcript database retention or
+LLM feedback in this phase. Keep the Render service at its default single
+Uvicorn worker if relying on this in-memory session transcript; multiple
+workers would maintain separate session memories.
+
+The browser's Web Speech API transcript is rendered only in that participant's
+page and is not sent to the other participant. Browser vendors may use remote
+speech-recognition services; this application cannot guarantee that browser
+transcription is processed locally. Users who require strictly local browser
+recognition should disable this feature or use a browser that provides an
+on-device recognition mode.
+
+The Faster-Whisper `small` CPU/int8 model is loaded lazily on first
+transcription, so the first chunk may take longer and the Render instance needs
+sufficient CPU and memory. No new Python package is required for the
+transcription transport.
+
 ## Smoke checks after deployment
 
 1. Open `https://englishbuddy-gsgg.onrender.com/health`; expect `{"status":"healthy"}`.

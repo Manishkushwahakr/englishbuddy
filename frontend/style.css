@@ -446,6 +446,22 @@ main {
   background: #fafaff;
 }
 
+.transcript-entry {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.transcript-entry:last-child {
+  margin-bottom: 0;
+}
+
+.transcript-interim {
+  min-height: 1.6em;
+  color: var(--muted);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
 .live-label {
   display: flex;
   align-items: center;

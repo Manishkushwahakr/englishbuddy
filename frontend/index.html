@@ -33,7 +33,7 @@
         <p>Meet another learner, practice real conversations and build confidence one conversation at a time.</p>
         <div class="feature-list">
           <div class="feature"><span>01</span><div><strong>Real conversations</strong><p>Practice with another learner.</p></div></div>
-          <div class="feature"><span>02</span><div><strong>Live transcript</strong><p>See speech recognized during practice.</p></div></div>
+          <div class="feature"><span>02</span><div><strong>Private transcript</strong><p>See your own speech recognized during practice.</p></div></div>
           <div class="feature"><span>03</span><div><strong>Learn at your pace</strong><p>Choose your English level.</p></div></div>
         </div>
       </div>
@@ -96,9 +96,9 @@
         <div class="panel info-panel">
           <span class="eyebrow">YOUR SESSION</span>
           <h2>Practice, don't worry.</h2>
-          <p class="muted">This first version focuses on speaking with another learner and viewing the live transcript.</p>
+          <p class="muted">Practice with another learner and follow your own speech transcript during the call.</p>
           <div class="info-row"><span class="status-dot"></span><span>Audio-only conversations</span></div>
-          <div class="info-row"><span class="status-dot"></span><span>Live speech-to-text</span></div>
+          <div class="info-row"><span class="status-dot"></span><span>Personal speech-to-text</span></div>
           <div class="info-row"><span class="status-dot"></span><span>No video required</span></div>
           <p class="small muted">AI feedback will be added in a later phase.</p>
         </div>
@@ -148,11 +148,15 @@
         <div class="panel transcript-panel">
           <div class="transcript-heading">
             <div>
-              <h2>Live transcript</h2>
-              <p class="muted small">Recognized speech appears here.</p>
+              <h2>Your private live transcript</h2>
+              <p class="muted small">Only speech from your microphone is shown on this device.</p>
             </div>
             <span class="live-label"><span class="status-dot"></span> LIVE</span>
           </div>
+          <p id="transcript-status" class="muted small" aria-live="polite">
+            Browser transcription starts when the audio call connects.
+          </p>
+          <p id="transcript-interim" class="transcript-interim" aria-live="polite"></p>
           <div id="transcript-list" class="transcript-list" aria-live="polite">
             <p id="transcript-empty" class="muted empty-state">Your conversation transcript will appear here when speech is recognized.</p>
           </div>

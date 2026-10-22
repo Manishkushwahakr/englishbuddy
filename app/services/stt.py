@@ -1,55 +1,45 @@
 
-import os
-import tempfile
+import io
+import threading
 
 from faster_whisper import WhisperModel
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def get_model():
     global _model
 
     if _model is None:
-        _model = WhisperModel(
-            "small",
-            device="cpu",
-            compute_type="int8"
-        )
+        with _model_lock:
+            if _model is None:
+                _model = WhisperModel(
+                    "small",
+                    device="cpu",
+                    compute_type="int8"
+                )
 
     return _model
 
 
-def transcribe_audio(audio_bytes: bytes) -> str:
-    """Transcribe one temporary WebM audio chunk."""
+def transcribe_audio(audio_bytes: bytes | bytearray) -> str:
+    """Transcribe one in-memory WAV chunk without writing audio to disk."""
+    if not audio_bytes:
+        raise ValueError("Audio chunk is empty")
 
-    audio_path = None
+    model = get_model()
+    segments, _ = model.transcribe(
+        io.BytesIO(audio_bytes),
+        task="transcribe",
+        language="en",
+        vad_filter=True,
+        condition_on_previous_text=False,
+        beam_size=5
+    )
 
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".webm",
-            delete=False
-        ) as audio_file:
-            audio_file.write(audio_bytes)
-            audio_path = audio_file.name
-
-        model = get_model()
-
-        segments, _ = model.transcribe(
-            audio_path,
-            task="transcribe",
-            language="en",
-            vad_filter=True,
-            condition_on_previous_text=False,
-            beam_size=5
-        )
-
-        return " ".join(
-            segment.text.strip()
-            for segment in segments
-            if segment.text.strip()
-        ).strip()
-
-    finally:
-        if audio_path and os.path.exists(audio_path):
-            os.remove(audio_path)
+    return " ".join(
+        segment.text.strip()
+        for segment in segments
+        if segment.text.strip()
+    ).strip()

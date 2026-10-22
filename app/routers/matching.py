@@ -24,6 +24,7 @@ from app.schemas.matching import (
     FindPartnerResponse,
     CancelQueueResponse
 )
+from app.services.transcript_session import clear_conversation_transcript
 
 
 router = APIRouter(
@@ -346,6 +347,7 @@ def skip_partner(
     db.add(new_queue_entry)
     db.commit()
     db.refresh(new_queue_entry)
+    clear_conversation_transcript(str(conversation.id))
 
     return JoinQueueResponse(
         queue_id=str(new_queue_entry.id),
@@ -426,6 +428,7 @@ def end_conversation(
         MatchingQueue.status == "matched"
     ).update({"status": "ended"}, synchronize_session=False)
     db.commit()
+    clear_conversation_transcript(str(conversation.id))
 
     return CancelQueueResponse(
         status="ended",

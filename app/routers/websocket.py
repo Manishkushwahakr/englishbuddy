@@ -1,21 +1,17 @@
 
 import asyncio
-import base64
-import binascii
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
-from jose import jwt, JWTError
 
-from app.config import SECRET_KEY
-from app.auth.security import ALGORITHM
 from app.database import SessionLocal
 from app.models.conversation import Conversation
 from app.models.conversation_participant import ConversationParticipant
 from app.models.matching_queue import MatchingQueue
-from app.services.stt import transcribe_audio
+from app.services.conversation_access import authorized_conversation_user
+from app.services.transcript_session import clear_conversation_transcript
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -129,6 +125,7 @@ def mark_conversation_ended(conversation_id: str, user_id: str):
             MatchingQueue.status == "matched"
         ).update({"status": "ended"}, synchronize_session=False)
         db.commit()
+        clear_conversation_transcript(str(conversation.id))
     except Exception:
         db.rollback()
         raise
@@ -142,25 +139,12 @@ async def conversation_websocket(
     conversation_id: str
 ):
     token = websocket.query_params.get("token")
-
-    if not token:
-        await websocket.close(code=1008)
-        return
-
-    try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
-        )
-
-        user_id = payload.get("sub")
-
-        if not user_id:
-            await websocket.close(code=1008)
-            return
-
-    except JWTError:
+    user_id = await asyncio.to_thread(
+        authorized_conversation_user,
+        token,
+        conversation_id
+    )
+    if not user_id:
         await websocket.close(code=1008)
         return
 
@@ -182,80 +166,11 @@ async def conversation_websocket(
             message = await websocket.receive_json()
             message_type = message.get("type")
 
-            # Speech-to-text
             if message_type == "audio_chunk":
-                try:
-                    encoded_audio = message.get("audio")
-
-                    if not isinstance(encoded_audio, str) or not encoded_audio:
-                        await websocket.send_json({
-                            "type": "stt_error",
-                            "message": "Audio data is missing"
-                        })
-                        continue
-
-                    if len(encoded_audio) > 2 * 1024 * 1024:
-                        await websocket.send_json({
-                            "type": "stt_error",
-                            "message": "Audio chunk is too large"
-                        })
-                        continue
-
-                    audio_bytes = base64.b64decode(
-                        encoded_audio,
-                        validate=True
-                    )
-
-                    print(
-                        f"STT received {len(audio_bytes)} bytes "
-                        f"from user {user_id}"
-                    )
-
-                    transcript = await asyncio.to_thread(
-                        transcribe_audio,
-                        audio_bytes
-                    )
-
-                    print(f"STT transcript: {transcript!r}")
-
-                    if transcript and transcript.strip():
-                        transcript_message = {
-                            "type": "transcript",
-                            "sender_id": user_id,
-                            "text": transcript.strip()
-                        }
-
-                        await manager.send_to_room(
-                            conversation_id,
-                            transcript_message,
-                            websocket
-                        )
-
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await safe_send_json(websocket, transcript_message)
-                    else:
-                        if websocket.client_state == WebSocketState.CONNECTED:
-                            await websocket.send_json({
-                                "type": "stt_status",
-                                "message": "No speech detected in this audio chunk"
-                            })
-
-                except (binascii.Error, ValueError):
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json({
-                            "type": "stt_error",
-                            "message": "Invalid audio encoding"
-                        })
-
-                except Exception as error:
-                    print(f"STT error: {error}")
-
-                    if websocket.client_state == WebSocketState.CONNECTED:
-                        await websocket.send_json({
-                            "type": "stt_error",
-                            "message": "Could not transcribe audio"
-                        })
-
+                await safe_send_json(websocket, {
+                    "type": "stt_error",
+                    "message": "Send audio chunks on the separate transcription connection."
+                })
                 continue
 
             # Existing WebRTC signaling
