@@ -22,7 +22,7 @@ variables in Render's dashboard:
 | --- | --- |
 | `DATABASE_URL` | The database's internal PostgreSQL connection URL |
 | `SECRET_KEY` | A newly generated, long, random signing key; keep it private |
-| `FRONTEND_ORIGINS` | `https://englishbuddy-for-me.vercel.app` (plus any exact custom domain, comma-separated) |
+| `FRONTEND_ORIGINS` | Additional exact origins beyond the required Vercel and `https://www.improbuddy.in` production origins (comma-separated) |
 | `MATCHING_FALLBACK_WAIT_SECONDS` | Optional; defaults to `9` before adjacent English levels can match |
 | `MATCHING_REPEAT_COOLDOWN_SECONDS` | Optional; defaults to `600` seconds before recently paired users can match again if alternatives exist |
 
@@ -31,11 +31,11 @@ Each user may complete up to five successful partner skips in a rolling
 so it requires no database schema migration. A rejected or duplicate skip does
 not consume a skip.
 
-Set `FRONTEND_ORIGINS` to the exact production deployment origin
-`https://englishbuddy-for-me.vercel.app`. Add a custom domain or a specific
-Vercel preview origin only if that origin needs API access. Do not use `*`.
-When this variable is unset, the backend allows this production origin and
-the local development ports.
+The backend always allows the exact production origins
+`https://englishbuddy-for-me.vercel.app` and `https://www.improbuddy.in`.
+`FRONTEND_ORIGINS` adds extra exact origins, such as a custom domain or a
+specific Vercel preview that needs API access. Do not use `*`. When the
+variable is unset, the backend also allows the local development ports.
 
 The app creates missing database tables during startup. Set a reachable
 PostgreSQL `DATABASE_URL` before the service starts. Table creation is not a
@@ -62,11 +62,11 @@ Because this frontend is plain static files, Vercel project environment
 variables are not injected into its browser JavaScript. Configure the public
 API URL in `frontend/config.js`; do not put secrets there.
 
-If Render already has a `FRONTEND_ORIGINS` environment variable, it overrides
-the code defaults. Ensure its value includes
-`https://englishbuddy-for-me.vercel.app` exactly (no trailing slash or path),
-then redeploy/restart the Render service. A custom Vercel domain must also be
-included if users will access the frontend through it.
+If Render already has a `FRONTEND_ORIGINS` environment variable, it adds
+origins beyond the required production allowlist. Deploy/restart the Render
+service after changing backend CORS configuration. Add any additional custom
+domain or specific Vercel preview origin only if it needs API access; origins
+must be exact (no trailing slash or path).
 If browser developer tools show `Failed to fetch`, check the preflight response:
 the API returns `400 Disallowed CORS origin` when the page's exact origin is not
 in `FRONTEND_ORIGINS`. The frontend displays its current page origin in its

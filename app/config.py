@@ -32,6 +32,11 @@ _DEFAULT_FRONTEND_ORIGINS = (
     "http://127.0.0.1:5501",
     "http://localhost:5501",
     "https://englishbuddy-for-me.vercel.app",
+    "https://www.improbuddy.in",
+)
+_REQUIRED_PRODUCTION_ORIGINS = (
+    "https://englishbuddy-for-me.vercel.app",
+    "https://www.improbuddy.in",
 )
 _configured_origins = os.getenv("FRONTEND_ORIGINS")
 
@@ -40,9 +45,14 @@ if _configured_origins is None:
 else:
     FRONTEND_ORIGINS = list(
         dict.fromkeys(
-            origin.strip().rstrip("/")
-            for origin in _configured_origins.split(",")
-            if origin.strip()
+            (
+                *_REQUIRED_PRODUCTION_ORIGINS,
+                *(
+                    origin.strip().rstrip("/")
+                    for origin in _configured_origins.split(",")
+                    if origin.strip()
+                ),
+            )
         )
     )
     if not FRONTEND_ORIGINS:
