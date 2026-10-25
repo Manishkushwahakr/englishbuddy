@@ -4,17 +4,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#f7f8fc">
+  <meta name="theme-color" content="#f5f5fb">
   <title>ImproBuddy — English Practice</title>
+  <link rel="icon" type="image/png" href="improbuddy-icon.png">
   <link rel="stylesheet" href="style.css">
   <script src="config.js" defer></script>
   <script src="app.js" defer></script>
 </head>
-<body>
+<body class="auth-active">
   <header class="topbar">
-    <a class="brand" href="#">
-      <span class="brand-icon">iB</span>
-      <span>ImproBuddy</span>
+    <a class="brand" href="index.html" aria-label="ImproBuddy home">
+      <img class="brand-logo" src="improbuddy-logo.png" alt="ImproBuddy">
     </a>
     <div id="user-area" class="user-area hidden">
       <span id="user-email"></span>
@@ -40,8 +40,8 @@
 
       <div class="panel auth-panel">
         <div class="tabs">
-          <button class="tab active" data-auth-tab="login">Log in</button>
-          <button class="tab" data-auth-tab="register">Create account</button>
+          <button class="tab active" data-auth-tab="login" type="button">Log in</button>
+          <button class="tab" data-auth-tab="register" type="button">Create account</button>
         </div>
 
         <form id="login-form">
@@ -69,6 +69,14 @@
           <button class="btn btn-primary btn-full" type="submit">Create account</button>
         </form>
       </div>
+      <nav class="auth-footer" aria-label="Legal and contact">
+        <div class="auth-footer-links">
+          <a href="privacy.html">Privacy Policy</a>
+          <a href="terms.html">Terms of Use</a>
+          <a href="mailto:builbbymanish@gmail.com">Contact Us</a>
+        </div>
+        <p>© 2026 ImproBuddy. Practice English with confidence.</p>
+      </nav>
     </section>
 
     <!-- Dashboard -->
@@ -206,6 +214,6 @@
     </section>
   </main>
 
-  <footer>ImproBuddy · Practice English with confidence</footer>
+  <footer class="app-footer">ImproBuddy · Practice English with confidence</footer>
 </body>
 </html>

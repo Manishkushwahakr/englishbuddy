@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f5fb">
+  <meta name="description" content="Learn what ImproBuddy collects and how account, call, and transcription data is handled.">
+  <title>Privacy Policy — ImproBuddy</title>
+  <link rel="icon" type="image/png" href="improbuddy-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="document-page">
+  <header class="topbar document-topbar">
+    <a class="brand" href="index.html" aria-label="ImproBuddy home">
+      <img class="brand-logo" src="improbuddy-logo.png" alt="ImproBuddy">
+    </a>
+    <a class="document-back" href="index.html">Back to login</a>
+  </header>
+
+  <main class="document-container">
+    <article class="document-card">
+      <span class="eyebrow">YOUR DATA, EXPLAINED</span>
+      <h1>Privacy Policy</h1>
+      <p class="document-updated">Last updated: October 26, 2026</p>
+      <p>This notice describes how ImproBuddy handles information when you use its English-practice website, matching features, audio calls, and transcription tools. It reflects the application code and deployment configuration reviewed for this version. Some hosting-provider retention details depend on settings that are not visible in the application and are identified below.</p>
+
+      <h2>Information you provide</h2>
+      <ul>
+        <li><strong>Account:</strong> your email address and password when you register. The application stores a password hash, not the original password.</li>
+        <li><strong>Profile:</strong> your name, English level, and optional learning goal. Your name and level may be shared with a matched practice partner as part of matching.</li>
+        <li><strong>Support messages:</strong> if you email us, we receive the information you choose to include in that message.</li>
+      </ul>
+
+      <h2>Authentication and service records</h2>
+      <p>After login, the site stores a signed access token in your browser's local storage. The token is configured to expire after 60 minutes; the site removes it when you log out or when an authenticated request detects an invalid or expired session. API requests send it in an authorization header. Call WebSocket connections send it as a query parameter, so whether provider access logs retain those request URLs depends on deployment logging settings and needs confirmation. The application database stores account and profile records, matching queue entries, and conversation participation/status and timing metadata. The frontend and backend are configured for Vercel and Render, and the backend connects to a PostgreSQL database provisioned for the deployment.</p>
+      <p>The application does not provide a self-service account deletion control. To request account or profile deletion, contact us at <a href="mailto:builbbymanish@gmail.com">builbbymanish@gmail.com</a>. The application code reviewed does not establish the retention or deletion schedule for database backups, hosting logs, or provider-level records; those details need to be confirmed against the active provider settings.</p>
+
+      <h2>Audio calls</h2>
+      <p>Calls are audio-only WebRTC sessions between matched participants. The application code does not record or save a call recording. WebRTC exchanges network connection information needed to establish a call; the matched peer may receive connection details as part of that process. The frontend is configured to use Google's public STUN service for connection discovery. Audio is also sent in bounded chunks to the ImproBuddy backend when Faster-Whisper transcription is available.</p>
+
+      <h2>Transcription</h2>
+      <p><strong>Browser live transcript:</strong> this optional feature uses the browser's Web Speech API and displays your recognized speech in your own page. The application does not send this browser transcript text to the other participant. Browser and operating-system providers may process recognition audio using their own remote services; ImproBuddy cannot determine or guarantee that a browser's recognition is processed only on-device. Check the provider's privacy information and settings.</p>
+      <p><strong>Faster-Whisper:</strong> when available, the browser sends short audio chunks to the authenticated ImproBuddy transcription WebSocket. The backend processes them in memory with Faster-Whisper; the code does not write the audio chunks to disk or store them in the application database. Recognized text and processing metadata are held in backend process memory for the conversation and cleared when the application ends that conversation. This is temporary application memory, not permanent transcript storage; the code does not define a fixed time-based retention period for an abandoned session or provider-level operational logs.</p>
+      <p>Transcription can be inaccurate or unavailable. ImproBuddy does not currently provide AI-generated feedback or a transcript-history feature.</p>
+
+      <h2>Service providers and data sharing</h2>
+      <p>Information is handled by the services needed to operate ImproBuddy: Vercel serves the frontend, Render hosts the backend, and the configured PostgreSQL database stores account and application records. Google's public STUN service may receive connection-discovery traffic. When the Faster-Whisper model is not already cached, the backend may retrieve model files from Hugging Face; the application sends audio to its own backend for transcription, not to the model-file provider. Browser speech-recognition providers may receive audio when their Web Speech implementation uses remote processing. We do not control these providers' independent handling; review their current privacy terms. Provider-level database, backup, access-log, and retention settings depend on the active deployment and should be confirmed.</p>
+      <p>During a call, the matched participant receives the WebRTC audio you send and the profile information used to introduce you. The application does not send your private Browser STT transcript to that participant.</p>
+
+      <h2>Security and your choices</h2>
+      <p>The application hashes passwords and validates authenticated requests. The transcription WebSocket checks the user's token and conversation membership before accepting audio. Production frontend and API URLs use HTTPS/WSS. No online service can be described as risk-free, and provider-level security, logging, and retention settings should be reviewed separately.</p>
+      <p>You can stop using the service, sign out to remove the locally stored access token, and contact us to request access, correction, or deletion of account information. There is currently no in-app self-service deletion feature. A support request is handled manually; provider backups and logs may have separate retention schedules that we need to confirm.</p>
+
+      <h2>Contact</h2>
+      <p>Questions or account/data requests: <a href="mailto:builbbymanish@gmail.com">builbbymanish@gmail.com</a>.</p>
+      <nav class="document-links" aria-label="Other pages">
+        <a href="index.html">Login</a>
+        <a href="terms.html">Terms of Use</a>
+        <a href="mailto:builbbymanish@gmail.com">Contact Us</a>
+      </nav>
+    </article>
+  </main>
+  <footer class="document-footer">© 2026 ImproBuddy</footer>
+</body>
+</html>

@@ -131,6 +131,7 @@ function showView(viewId) {
   document.querySelectorAll(".view").forEach((view) => {
     view.classList.toggle("active", view === target);
   });
+  document.body.classList.toggle("auth-active", viewId === "auth-view");
   document.body.classList.toggle("call-active", viewId === "call-view");
   document.querySelector('meta[name="theme-color"]').content =
     viewId === "call-view" ? "#10111b" : "#f7f8fc";
