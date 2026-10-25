@@ -51,7 +51,10 @@
           <input id="login-email" name="email" type="email" autocomplete="email" required>
           <label for="login-password">Password</label>
           <input id="login-password" name="password" type="password" autocomplete="current-password" minlength="8" required>
-          <button class="btn btn-primary btn-full" type="submit">Log in</button>
+          <button class="btn btn-primary btn-full auth-submit" type="submit" aria-live="polite" aria-busy="false">
+            <span class="auth-submit-label">Log in</span>
+            <span class="auth-spinner" aria-hidden="true" hidden></span>
+          </button>
         </form>
 
         <form id="register-form" class="hidden">
@@ -118,48 +121,86 @@
 
     <!-- Audio call -->
     <section id="call-view" class="view">
-      <div class="page-heading">
-        <span class="eyebrow">LIVE PRACTICE</span>
-        <h1>Your conversation</h1>
-        <p id="call-status" class="muted" aria-live="polite">Waiting to connect...</p>
-        <button id="start-call-btn" class="btn btn-primary hidden" type="button">Enable microphone and start audio</button>
-      </div>
-
-      <div class="call-grid">
-        <div class="panel call-panel">
-          <div class="session-icon" aria-hidden="true">
-            <span class="avatar">👋</span>
-          </div>
-          <div class="audio-wave" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
-            <span></span><span></span><span></span>
-          </div>
-          <h2>Your speaking session</h2>
-          <p class="muted">Audio-only conversation</p>
-          <div class="call-controls">
-            <button id="mute-btn" class="btn btn-outline" type="button">Mute microphone</button>
-            <button id="skip-partner-btn" class="btn btn-outline" type="button">Skip Partner</button>
-            <button id="end-call-btn" class="btn btn-danger" type="button">End call</button>
-          </div>
-          <p id="skip-limit-message" class="muted small hidden" aria-live="polite"></p>
-          <audio id="remote-audio" autoplay playsinline controls></audio>
+      <div class="call-shell">
+        <div class="call-intro">
+          <span class="eyebrow">IMPROBUDDY <span aria-hidden="true">·</span> LIVE PRACTICE</span>
+          <p id="call-status" class="call-message" aria-live="polite">Waiting to connect...</p>
+          <button id="start-call-btn" class="btn btn-primary hidden" type="button">Enable microphone and start audio</button>
+          <button id="remote-audio-retry-btn" class="btn audio-retry-btn hidden" type="button">Enable call audio</button>
         </div>
 
-        <div class="panel transcript-panel">
-          <div class="transcript-heading">
-            <div>
-              <h2>Your private live transcript</h2>
-              <p class="muted small">Only speech from your microphone is shown on this device.</p>
+        <div class="panel call-panel">
+          <div class="partner-identity">
+            <div class="partner-avatar-ring">
+              <div id="partner-avatar" class="partner-avatar" aria-hidden="true">?</div>
             </div>
-            <span class="live-label"><span class="status-dot"></span> LIVE</span>
+            <h1 id="partner-name">Your practice partner</h1>
+            <div class="call-meta">
+              <span id="call-connection-state" class="connection-pill" data-state="connecting" aria-live="polite">
+                <span class="connection-dot" aria-hidden="true"></span>
+                <span id="call-connection-label">Connecting</span>
+              </span>
+              <span id="call-duration" class="call-duration" aria-label="Call duration">00:00</span>
+            </div>
+            <p class="call-subtitle">Audio call <span aria-hidden="true">·</span> English practice session</p>
           </div>
-          <p id="transcript-status" class="muted small" aria-live="polite">
-            Browser transcription starts when the audio call connects.
-          </p>
-          <p id="transcript-interim" class="transcript-interim" aria-live="polite"></p>
-          <div id="transcript-list" class="transcript-list" aria-live="polite">
-            <p id="transcript-empty" class="muted empty-state">Your conversation transcript will appear here when speech is recognized.</p>
+
+          <div class="audio-wave" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span>
           </div>
+
+          <div class="call-controls" aria-label="Call controls">
+            <div class="call-control">
+              <button id="mute-btn" class="control-button" type="button" aria-label="Mute microphone" aria-pressed="false" disabled>
+                <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11v1a7 7 0 0 1-14 0v-1M12 19v3m-4 0h8"/></svg>
+              </button>
+              <span id="mute-label" class="control-label">Mute</span>
+            </div>
+            <div class="call-control">
+              <button id="end-call-btn" class="control-button control-button-end" type="button" aria-label="End call">
+                <svg class="control-icon end-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 14.1a11.4 11.4 0 0 1 14.4 0l1.1.9a1.6 1.6 0 0 1 .3 2.2l-1.2 1.6a1.6 1.6 0 0 1-1.9.5l-2.9-1.2a1.6 1.6 0 0 1-1-1.5v-1a9.7 9.7 0 0 0-3.2 0v1a1.6 1.6 0 0 1-1 1.5l-2.9 1.2a1.6 1.6 0 0 1-1.9-.5l-1.2-1.6a1.6 1.6 0 0 1 .3-2.2l1.1-.9Z"/></svg>
+              </button>
+              <span class="control-label">End Call</span>
+            </div>
+            <div class="call-control">
+              <button id="skip-partner-btn" class="control-button" type="button" aria-label="Skip partner">
+                <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14l10-7L5 5Z"/><path d="M19 5v14"/></svg>
+              </button>
+              <span id="skip-label" class="control-label">Skip Partner</span>
+            </div>
+          </div>
+
+          <p id="skip-limit-message" class="skip-limit-message hidden" aria-live="polite"></p>
+          <audio id="remote-audio" autoplay playsinline></audio>
+
+          <section class="transcript-panel" aria-label="Private live transcript">
+            <button id="transcript-toggle" class="transcript-toggle" type="button" aria-expanded="false" aria-controls="transcript-content">
+              <span class="transcript-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M5 4.8A2.8 2.8 0 0 1 7.8 2h8.4A2.8 2.8 0 0 1 19 4.8v10.4a2.8 2.8 0 0 1-2.8 2.8H10l-5 3V4.8Z"/><path d="M9 8h6m-6 4h6"/></svg>
+              </span>
+              <span class="transcript-title-group">
+                <span class="transcript-title">Your Live Transcript</span>
+                <span class="transcript-privacy">Only you can see your transcript</span>
+              </span>
+              <span id="transcript-state" class="transcript-state" data-state="waiting">Waiting</span>
+              <svg class="transcript-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="transcript-content" class="transcript-content hidden">
+              <button id="browser-transcript-button" class="browser-transcript-button hidden" type="button">
+                Start live transcript
+              </button>
+              <p id="transcript-status" class="transcript-status" aria-live="polite">
+                Your private browser transcript is not started.
+              </p>
+              <p id="server-transcript-status" class="server-transcript-status" aria-live="polite"></p>
+              <p id="transcript-interim" class="transcript-interim" aria-live="polite"></p>
+              <div id="transcript-list" class="transcript-list" aria-live="polite">
+                <p id="transcript-empty" class="muted empty-state">Your speech will appear here when it is recognized.</p>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </section>

@@ -119,6 +119,17 @@ transcription is processed locally. Users who require strictly local browser
 recognition should disable this feature or use a browser that provides an
 on-device recognition mode.
 
+Microphone permission is requested only after the matched user selects
+**Enable microphone and start audio**, keeping the permission prompt tied to a
+clear user action. Browser speech recognition is also opt-in: after the audio
+call connects, expand the transcript panel and select **Start live transcript**
+so recognition starts from a user action. Support varies by browser and operating
+system; the frontend detects the standard and WebKit-prefixed APIs and reports
+when neither is available. Mobile browsers may suspend recognition when the page
+is backgrounded or the device is locked. In that case, return to the call and
+select **Resume live transcript**. Browser recognition failures do not stop
+WebRTC or the independent Faster-Whisper audio-chunk path.
+
 The Faster-Whisper `small` CPU/int8 model is loaded lazily on first
 transcription, so the first chunk may take longer and the Render instance needs
 sufficient CPU and memory. No new Python package is required for the

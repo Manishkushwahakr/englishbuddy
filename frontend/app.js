@@ -9,6 +9,11 @@ const userArea = document.getElementById("user-area");
 
 const loginForm = document.getElementById("login-form");
 const registerForm = document.getElementById("register-form");
+const loginButton = loginForm.querySelector('button[type="submit"]');
+const loginButtonLabel = loginButton.querySelector(".auth-submit-label");
+const loginSpinner = loginButton.querySelector(".auth-spinner");
+const LOGIN_TIMEOUT_MS = 20000;
+let loginInProgress = false;
 
 // Show status messages
 function showNotice(message, type = "") {
@@ -126,20 +131,23 @@ function showView(viewId) {
   document.querySelectorAll(".view").forEach((view) => {
     view.classList.toggle("active", view === target);
   });
+  document.body.classList.toggle("call-active", viewId === "call-view");
+  document.querySelector('meta[name="theme-color"]').content =
+    viewId === "call-view" ? "#10111b" : "#f7f8fc";
 }
 
 // Display the dashboard
-async function loadDashboard() {
-  const user = await apiRequest("/auth/me");
+async function loadDashboard({ signal } = {}) {
+  const user = await apiRequest("/auth/me", { signal });
   userEmail.textContent = user.email;
   userArea.classList.remove("hidden");
   showView("dashboard-view");
   hideNotice();
 
   try {
-    await apiRequest("/profile");
+    await apiRequest("/profile", { signal });
   } catch (error) {
-    if (error.sessionExpired) {
+    if (error.sessionExpired || signal?.aborted) {
       throw error;
     }
     console.warn("Could not load profile:", error.message);
@@ -149,10 +157,21 @@ async function loadDashboard() {
 // Login
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (loginInProgress) return;
+  loginInProgress = true;
   hideNotice();
 
-  const button = loginForm.querySelector('button[type="submit"]');
-  if (button) button.disabled = true;
+  loginButton.disabled = true;
+  loginButton.classList.add("is-loading");
+  loginButton.setAttribute("aria-busy", "true");
+  loginButtonLabel.textContent = "Signing you in…";
+  loginSpinner.hidden = false;
+  const requestController = new AbortController();
+  let requestTimedOut = false;
+  const timeout = setTimeout(() => {
+    requestTimedOut = true;
+    requestController.abort();
+  }, LOGIN_TIMEOUT_MS);
 
   try {
     const email = loginForm.elements.namedItem("email").value.trim();
@@ -161,20 +180,33 @@ loginForm.addEventListener("submit", async (event) => {
     const data = await apiRequest("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
+      signal: requestController.signal,
     });
 
     localStorage.setItem(TOKEN_KEY, data.access_token);
 
-    await loadDashboard();
+    await loadDashboard({ signal: requestController.signal });
     loginForm.reset();
   } catch (error) {
+    clearTimeout(timeout);
     localStorage.removeItem(TOKEN_KEY);
     userEmail.textContent = "";
     userArea.classList.add("hidden");
     showView("auth-view");
-    showNotice(error.message || "Login failed.", "error");
+    showNotice(
+      requestTimedOut
+        ? "Login request timed out. Check your connection and try again."
+        : error.message || "Login failed. Please check your details and try again.",
+      "error"
+    );
   } finally {
-    if (button) button.disabled = false;
+    clearTimeout(timeout);
+    loginInProgress = false;
+    loginButton.disabled = false;
+    loginButton.classList.remove("is-loading");
+    loginButton.setAttribute("aria-busy", "false");
+    loginButtonLabel.textContent = "Log in";
+    loginSpinner.hidden = true;
   }
 });
 
@@ -262,12 +294,25 @@ const matchingLoader = document.querySelector("#matching-view .loader");
 const callStatus = document.getElementById("call-status");
 const callPanel = document.querySelector(".call-panel");
 const startCallButton = document.getElementById("start-call-btn");
+const remoteAudioRetryButton = document.getElementById("remote-audio-retry-btn");
 const endCallButton = document.getElementById("end-call-btn");
 const skipPartnerButton = document.getElementById("skip-partner-btn");
 const skipLimitMessage = document.getElementById("skip-limit-message");
 const muteButton = document.getElementById("mute-btn");
+const muteLabel = document.getElementById("mute-label");
+const skipLabel = document.getElementById("skip-label");
+const callConnectionState = document.getElementById("call-connection-state");
+const callConnectionLabel = document.getElementById("call-connection-label");
+const callDuration = document.getElementById("call-duration");
+const partnerName = document.getElementById("partner-name");
+const partnerAvatar = document.getElementById("partner-avatar");
+const transcriptToggle = document.getElementById("transcript-toggle");
+const transcriptContent = document.getElementById("transcript-content");
+const transcriptState = document.getElementById("transcript-state");
+const browserTranscriptButton = document.getElementById("browser-transcript-button");
 const remoteAudio = document.getElementById("remote-audio");
 const transcriptStatus = document.getElementById("transcript-status");
+const serverTranscriptStatus = document.getElementById("server-transcript-status");
 const transcriptInterim = document.getElementById("transcript-interim");
 const transcriptList = document.getElementById("transcript-list");
 const MATCHING_POLL_INTERVAL = 2000;
@@ -282,8 +327,71 @@ let peerConnection = null;
 let localAudioStream = null;
 let skipLimitTimer = null;
 
-function setTranscriptStatus(message) {
+function setTranscriptStatus(message, state = null) {
   transcriptStatus.textContent = message;
+  if (state) setTranscriptState(state);
+}
+
+function setServerTranscriptStatus(message) {
+  serverTranscriptStatus.textContent = message;
+}
+
+function setTranscriptState(state) {
+  transcriptState.textContent = state;
+  transcriptState.dataset.state = state.toLowerCase();
+}
+
+function setCallConnectionState(state) {
+  const labels = {
+    connecting: "Connecting",
+    connected: "Connected",
+    disconnected: "Disconnected",
+  };
+  callConnectionState.dataset.state = state;
+  callConnectionLabel.textContent = labels[state];
+}
+
+function formatCallDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function updateCallDuration(session) {
+  if (session !== callSession || session.connectedAt === null) return;
+  const elapsed = session.callDurationMs + Date.now() - session.connectedAt;
+  callDuration.textContent = formatCallDuration(Math.floor(elapsed / 1000));
+}
+
+function startCallDuration(session) {
+  if (session !== callSession || session.durationTimer !== null) return;
+  session.connectedAt = Date.now();
+  updateCallDuration(session);
+  session.durationTimer = setInterval(() => updateCallDuration(session), 1000);
+}
+
+function stopCallDuration(session) {
+  if (!session) return;
+  if (session.durationTimer !== null) {
+    clearInterval(session.durationTimer);
+    session.durationTimer = null;
+  }
+  if (session.connectedAt !== null) {
+    session.callDurationMs += Date.now() - session.connectedAt;
+    session.connectedAt = null;
+  }
+  if (session === callSession) {
+    callDuration.textContent = formatCallDuration(
+      Math.floor(session.callDurationMs / 1000)
+    );
+  }
+}
+
+function updateMuteControl(isMuted) {
+  muteButton.classList.toggle("is-muted", isMuted);
+  muteButton.setAttribute("aria-pressed", String(isMuted));
+  muteButton.setAttribute("aria-label", isMuted ? "Unmute microphone" : "Mute microphone");
+  muteLabel.textContent = isMuted ? "Unmute" : "Mute";
 }
 
 function clearPrivateTranscript() {
@@ -314,6 +422,102 @@ function speechRecognitionConstructor() {
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
+const SPEECH_RESTART_DELAYS = [750, 1500, 3000];
+const SPEECH_START_TIMEOUT_MS = 10000;
+const SPEECH_STABLE_DURATION_MS = 12000;
+
+function updateBrowserTranscriptButton(session) {
+  const supported = Boolean(speechRecognitionConstructor());
+  browserTranscriptButton.classList.toggle("hidden", !supported);
+  if (!supported) return;
+
+  browserTranscriptButton.textContent =
+    session.speechRecognitionActive || session.speechRecognitionStarting
+      ? "Stop live transcript"
+      : session.speechRecognitionRequested
+        ? "Resume live transcript"
+        : "Start live transcript";
+  browserTranscriptButton.disabled = !session.callConnected;
+}
+
+function prepareBrowserSpeechRecognition(session) {
+  if (session !== callSession) return;
+  if (!speechRecognitionConstructor()) {
+    browserTranscriptButton.classList.add("hidden");
+    setTranscriptStatus(
+      "Live transcript is not supported in this browser.",
+      "unavailable"
+    );
+    return;
+  }
+
+  updateBrowserTranscriptButton(session);
+  if (session.speechRecognitionActive) return;
+  if (session.speechRecognitionStarting) return;
+  if (session.speechRecognitionRequested && session.speechNeedsUserGesture) {
+    setTranscriptStatus(
+      "Tap Resume live transcript to continue after the browser interruption.",
+      "paused"
+    );
+    return;
+  }
+  if (session.speechRecognitionRequested && session.speechRestartTimer !== null) {
+    return;
+  }
+  setTranscriptStatus(
+    "Tap Start live transcript to begin private browser speech recognition.",
+    "ready"
+  );
+}
+
+function clearSpeechTimers(session) {
+  clearTimeout(session.speechRestartTimer);
+  clearTimeout(session.speechStartTimer);
+  session.speechRestartTimer = null;
+  session.speechStartTimer = null;
+}
+
+function scheduleBrowserSpeechRestart(session, recognition) {
+  if (
+    session !== callSession ||
+    !session.speechRecognitionRequested ||
+    session.speechNeedsUserGesture ||
+    !session.callConnected ||
+    document.visibilityState !== "visible" ||
+    !localAudioStream?.getAudioTracks().some((track) => track.enabled)
+  ) {
+    return;
+  }
+
+  if (session.speechRestartAttempts >= SPEECH_RESTART_DELAYS.length) {
+    session.speechRecognitionRequested = false;
+    updateBrowserTranscriptButton(session);
+    setTranscriptStatus(
+      "Live transcript stopped after repeated browser interruptions. Tap to try again.",
+      "unavailable"
+    );
+    return;
+  }
+
+  const delay = SPEECH_RESTART_DELAYS[session.speechRestartAttempts];
+  session.speechRestartAttempts += 1;
+  updateBrowserTranscriptButton(session);
+  setTranscriptStatus(
+    `Browser speech recognition stopped. Retrying (${session.speechRestartAttempts}/${SPEECH_RESTART_DELAYS.length})…`,
+    "reconnecting"
+  );
+  session.speechRestartTimer = setTimeout(() => {
+    session.speechRestartTimer = null;
+    if (
+      session === callSession &&
+      session.speechRecognition === recognition &&
+      session.speechRecognitionRequested
+    ) {
+      startBrowserSpeechRecognition(session);
+    }
+  }, delay);
+}
+
 function createTranscriptionStreamId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   if (!window.crypto?.getRandomValues) return null;
@@ -325,102 +529,198 @@ function createTranscriptionStreamId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function startBrowserSpeechRecognition(session) {
-  if (
-    session !== callSession ||
-    !session.callConnected ||
-    !localAudioStream?.getAudioTracks().some((track) => track.enabled)
-  ) {
-    return;
-  }
-
+function startBrowserSpeechRecognition(session, fromUserGesture = false) {
+  if (session !== callSession) return;
   const SpeechRecognition = speechRecognitionConstructor();
   if (!SpeechRecognition) {
+    browserTranscriptButton.classList.add("hidden");
     setTranscriptStatus(
-      "Live browser transcription is not supported in this browser. Server transcription may still be available."
+      "Live transcript is not supported in this browser.",
+      "unavailable"
     );
     return;
   }
 
+  if (fromUserGesture) {
+    session.speechRecognitionRequested = true;
+    session.speechNeedsUserGesture = false;
+    session.speechRestartAttempts = 0;
+  }
+  if (!session.callConnected) {
+    setTranscriptStatus("Connect the audio call before starting a live transcript.", "waiting");
+    return;
+  }
+  if (!localAudioStream?.getAudioTracks().some((track) => track.enabled)) {
+    setTranscriptStatus("Unmute your microphone before starting the live transcript.", "paused");
+    updateBrowserTranscriptButton(session);
+    return;
+  }
+  if (document.visibilityState !== "visible") {
+    session.speechNeedsUserGesture = true;
+    setTranscriptStatus(
+      "Live transcript is paused while this page is in the background. Return and tap Resume live transcript.",
+      "paused"
+    );
+    updateBrowserTranscriptButton(session);
+    return;
+  }
+  if (!session.speechRecognitionRequested) return;
+  if (session.speechRecognitionActive || session.speechRecognitionStarting) return;
+
   if (!session.speechRecognition) {
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    session.speechRecognition = recognition;
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+      session.speechRecognition = recognition;
 
-    recognition.onstart = () => {
-      if (session === callSession) {
-        setTranscriptStatus("Private browser transcription is active on this device.");
-      }
-    };
+      recognition.onstart = () => {
+        if (session !== callSession) return;
+        clearSpeechTimers(session);
+        session.speechRecognitionStarting = false;
+        session.speechRecognitionActive = true;
+        session.speechStartedAt = Date.now();
+        session.speechLastFinalIndex = -1;
+        updateBrowserTranscriptButton(session);
+        setTranscriptStatus("Listening for your speech on this device.", "listening");
+      };
 
-    recognition.onresult = (event) => {
-      if (session !== callSession) return;
-      let interim = "";
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        const text = result[0]?.transcript?.trim();
-        if (!text) continue;
-        if (result.isFinal) {
-          appendPrivateTranscript(text);
-        } else {
-          interim += `${text} `;
-        }
-      }
-      transcriptInterim.textContent = interim.trim();
-    };
-
-    recognition.onerror = (event) => {
-      if (session !== callSession) return;
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-        session.speechRecognitionActive = false;
-        setTranscriptStatus(
-          "Browser transcription permission was denied. The audio call can continue."
-        );
-      } else if (event.error !== "no-speech" && event.error !== "aborted") {
-        session.speechRecognitionActive = false;
-        setTranscriptStatus(
-          `Browser transcription is unavailable (${event.error}). The audio call can continue.`
-        );
-      }
-    };
-
-    recognition.onend = () => {
-      if (session !== callSession || !session.speechRecognitionActive) return;
-      session.speechRestartTimer = setTimeout(() => {
-        if (
-          session === callSession &&
-          session.speechRecognitionActive &&
-          session.speechRecognition === recognition
-        ) {
-          try {
-            recognition.start();
-          } catch (error) {
-            if (error.name !== "InvalidStateError") {
-              setTranscriptStatus(`Browser transcription could not restart: ${error.message}`);
+      recognition.onresult = (event) => {
+        if (session !== callSession) return;
+        let interim = "";
+        const firstChangedResult = Math.max(0, event.resultIndex || 0);
+        for (let index = firstChangedResult; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const text = result[0]?.transcript?.trim();
+          if (!text) continue;
+          if (result.isFinal) {
+            if (index > session.speechLastFinalIndex) {
+              appendPrivateTranscript(text);
+              session.speechLastFinalIndex = index;
             }
+          } else {
+            interim += `${text} `;
           }
         }
-      }, 250);
-    };
+        transcriptInterim.textContent = interim.trim();
+      };
+
+      recognition.onerror = (event) => {
+        if (session !== callSession) return;
+        clearTimeout(session.speechStartTimer);
+        session.speechStartTimer = null;
+        session.speechRecognitionStarting = false;
+        session.speechRecognitionActive = false;
+        updateBrowserTranscriptButton(session);
+        const fatalErrors = [
+          "not-allowed",
+          "service-not-allowed",
+          "audio-capture",
+          "language-not-supported",
+        ];
+        if (fatalErrors.includes(event.error)) {
+          session.speechRecognitionRequested = false;
+          const message = event.error === "not-allowed" || event.error === "service-not-allowed"
+            ? "Browser speech recognition permission was denied. Check browser microphone permissions and try again."
+            : event.error === "audio-capture"
+              ? "Browser speech recognition cannot access a microphone. The audio call can continue."
+              : "English speech recognition is not available in this browser.";
+          setTranscriptStatus(message, "unavailable");
+          updateBrowserTranscriptButton(session);
+        } else if (event.error === "no-speech") {
+          setTranscriptStatus(
+            "No speech was detected. Waiting for the browser to restart recognition.",
+            "reconnecting"
+          );
+        } else if (event.error !== "aborted") {
+          setTranscriptStatus(
+            `Browser speech recognition was interrupted (${event.error}).`,
+            "reconnecting"
+          );
+        }
+      };
+
+      recognition.onend = () => {
+        if (session !== callSession || session.speechRecognition !== recognition) return;
+        clearTimeout(session.speechStartTimer);
+        session.speechStartTimer = null;
+        const ranFor = session.speechStartedAt
+          ? Date.now() - session.speechStartedAt
+          : 0;
+        session.speechRecognitionActive = false;
+        session.speechRecognitionStarting = false;
+        session.speechStartedAt = null;
+        transcriptInterim.textContent = "";
+        if (ranFor >= SPEECH_STABLE_DURATION_MS) {
+          session.speechRestartAttempts = 0;
+        }
+        updateBrowserTranscriptButton(session);
+        if (session.speechRecognitionRequested && !session.speechNeedsUserGesture) {
+          scheduleBrowserSpeechRestart(session, recognition);
+        }
+      };
+    } catch (error) {
+      session.speechRecognitionRequested = false;
+      setTranscriptStatus(
+        `Browser speech recognition could not be initialized: ${error.message}`,
+        "unavailable"
+      );
+      updateBrowserTranscriptButton(session);
+      return;
+    }
   }
 
-  session.speechRecognitionActive = true;
+  session.speechRecognitionStarting = true;
+  setTranscriptStatus("Starting browser speech recognition…", "starting");
+  updateBrowserTranscriptButton(session);
   try {
     session.speechRecognition.start();
+    clearTimeout(session.speechStartTimer);
+    session.speechStartTimer = setTimeout(() => {
+      if (
+        session === callSession &&
+        session.speechRecognitionStarting &&
+        session.speechRecognition
+      ) {
+        session.speechRecognitionStarting = false;
+        session.speechRecognitionRequested = false;
+        stopBrowserSpeechRecognition(session);
+        setTranscriptStatus(
+          "Browser speech recognition did not start. Check microphone permission and try again.",
+          "unavailable"
+        );
+        updateBrowserTranscriptButton(session);
+      }
+    }, SPEECH_START_TIMEOUT_MS);
   } catch (error) {
-    if (error.name !== "InvalidStateError") {
-      session.speechRecognitionActive = false;
-      setTranscriptStatus(`Browser transcription could not start: ${error.message}`);
+    session.speechRecognitionStarting = false;
+    if (error.name === "InvalidStateError") {
+      setTranscriptStatus(
+        "The browser is already starting speech recognition. Wait briefly or tap Resume to try again.",
+        "reconnecting"
+      );
+      updateBrowserTranscriptButton(session);
+      return;
     }
+    session.speechRecognitionRequested = false;
+    setTranscriptStatus(
+      `Browser speech recognition could not start: ${error.message}`,
+      "unavailable"
+    );
+    updateBrowserTranscriptButton(session);
   }
 }
 
-function stopBrowserSpeechRecognition(session) {
+function stopBrowserSpeechRecognition(session, preserveRequest = false) {
+  if (!session) return;
+  clearSpeechTimers(session);
   session.speechRecognitionActive = false;
-  clearTimeout(session.speechRestartTimer);
-  session.speechRestartTimer = null;
+  session.speechRecognitionStarting = false;
+  if (!preserveRequest) {
+    session.speechRecognitionRequested = false;
+    session.speechNeedsUserGesture = false;
+  }
   if (session.speechRecognition) {
     session.speechRecognition.onstart = null;
     session.speechRecognition.onresult = null;
@@ -502,12 +802,12 @@ function sendAudioChunk(session, audioSamples, sourceRate) {
     return;
   }
   if (session.serverChunkPendingSequence !== null) {
-    setTranscriptStatus("Server transcription is still processing; this chunk was skipped to avoid buffering.");
+    setServerTranscriptStatus("A Faster-Whisper chunk is still processing; this chunk was skipped.");
     audioSamples.fill(0);
     return;
   }
   if (socket.bufferedAmount > 500_000) {
-    setTranscriptStatus("Server transcription is busy; a chunk was skipped to keep the call responsive.");
+    setServerTranscriptStatus("Faster-Whisper is busy; a chunk was skipped to keep the call responsive.");
     audioSamples.fill(0);
     return;
   }
@@ -520,7 +820,7 @@ function sendAudioChunk(session, audioSamples, sourceRate) {
     pcmSamples = resampleTo16k(audioSamples, sourceRate);
     wav = createWavBuffer(pcmSamples);
     if (wav.byteLength > 256 * 1024) {
-      setTranscriptStatus("A server transcription chunk exceeded the size limit and was discarded.");
+      setServerTranscriptStatus("A Faster-Whisper audio chunk exceeded the size limit and was discarded.");
       return;
     }
 
@@ -535,10 +835,10 @@ function sendAudioChunk(session, audioSamples, sourceRate) {
     session.serverChunkPendingSequence = sequence;
     serialized = JSON.stringify(message);
     socket.send(serialized);
-    setTranscriptStatus("Private server transcription is processing an audio chunk.");
+    setServerTranscriptStatus("Faster-Whisper is processing a private audio chunk.");
   } catch (error) {
     session.serverChunkPendingSequence = null;
-    setTranscriptStatus(`Server transcription could not send an audio chunk: ${error.message}`);
+    setServerTranscriptStatus(`Faster-Whisper could not process an audio chunk: ${error.message}`);
   } finally {
     audioSamples.fill(0);
     pcmSamples?.fill(0);
@@ -565,9 +865,7 @@ async function startAudioChunkCapture(session) {
     typeof AudioWorkletNode === "undefined" ||
     !session.transcriptionStreamId
   ) {
-    setTranscriptStatus(
-      "This browser does not support server transcription. Private browser transcription may still work."
-    );
+    setServerTranscriptStatus("This browser does not support Faster-Whisper audio capture.");
     return;
   }
 
@@ -617,12 +915,12 @@ async function startAudioChunkCapture(session) {
     if (context.state !== "running") {
       throw new Error("The audio processor could not start.");
     }
-    setTranscriptStatus("Server-side Faster-Whisper transcription is active for this call.");
+    setServerTranscriptStatus("Faster-Whisper audio capture is active for this call.");
   } catch (error) {
     session.audioChunkCaptureStarted = false;
     if (session !== callSession) return;
-    setTranscriptStatus(
-      `Server transcription is unavailable: ${error.message}. The audio call can continue.`
+    setServerTranscriptStatus(
+      `Faster-Whisper is unavailable: ${error.message}. Browser transcription and the audio call can continue.`
     );
     if (session.audioContext && session.audioContext.state !== "closed") {
       await session.audioContext.close().catch((closeError) => {
@@ -654,17 +952,18 @@ function closeAudioChunkCapture(session) {
 
 function startCallTranscription(session) {
   if (session !== callSession || !session.callConnected) return;
-  if (
+  prepareBrowserSpeechRecognition(session);
+  const speakerIdentityMatches = !(
     session.transcriptionSpeakerId &&
     session.userId &&
     session.transcriptionSpeakerId !== session.userId
-  ) {
+  );
+  if (!speakerIdentityMatches) {
     session.transcriptionReady = false;
-    setTranscriptStatus("The transcription connection authenticated a different speaker.");
-    return;
+    setServerTranscriptStatus("Faster-Whisper speaker identity did not match this call.");
+  } else {
+    startAudioChunkCapture(session);
   }
-  startBrowserSpeechRecognition(session);
-  startAudioChunkCapture(session);
 }
 
 function createCallSocketUrl(conversationId, suffix = "") {
@@ -688,7 +987,7 @@ function setSkipAvailability(remaining, retryAfterSeconds) {
   clearSkipLimitTimer();
   const limitReached = remaining <= 0;
   skipPartnerButton.disabled = limitReached;
-  skipPartnerButton.textContent = limitReached ? "Skip unavailable" : "Skip Partner";
+  skipLabel.textContent = limitReached ? "Unavailable" : "Skip Partner";
   skipLimitMessage.classList.toggle("hidden", !limitReached);
 
   if (!limitReached) {
@@ -738,13 +1037,18 @@ function showMatchedPartner(match) {
   matchingLoader.classList.add("hidden");
   activeMatch = match;
   matchingTitle.textContent = "Partner found!";
-  const partnerLabel = match.partner_name || match.partner_email || "another learner";
-  matchingMessage.textContent =
-    `Matched with ${partnerLabel}` +
-    `${match.partner_email ? ` (${match.partner_email})` : ""}.`;
+  const partnerLabel = typeof match.partner_name === "string" && match.partner_name.trim()
+    ? match.partner_name.trim()
+    : "Your practice partner";
+  const initials = partnerLabel === "Your practice partner"
+    ? "?"
+    : partnerLabel.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase();
+  partnerName.textContent = partnerLabel;
+  partnerAvatar.textContent = initials;
+  matchingMessage.textContent = `Matched with ${partnerLabel}.`;
   cancelMatchingButton.classList.add("hidden");
   setSkipAvailability(1, 0);
-  callStatus.textContent = `Partner found: ${partnerLabel}. Connecting to the audio call...`;
+  callStatus.textContent = "Connecting to your audio practice session...";
   showView("call-view");
   refreshSkipAvailability(match);
   startCall(match);
@@ -763,6 +1067,23 @@ function updateCallStatus(message) {
   callStatus.textContent = message;
 }
 
+function pauseCallUi(session) {
+  if (session !== callSession) return;
+  session.callConnected = false;
+  callPanel.classList.remove("is-connected");
+  remoteAudioRetryButton.classList.add("hidden");
+  setCallConnectionState("disconnected");
+  stopCallDuration(session);
+  stopBrowserSpeechRecognition(session);
+  browserTranscriptButton.classList.add("hidden");
+  closeAudioChunkCapture(session);
+  setTranscriptStatus(
+    "Browser transcript stopped because the audio call is disconnected.",
+    "paused"
+  );
+  setServerTranscriptStatus("Faster-Whisper capture stopped because the audio call disconnected.");
+}
+
 function cleanupCall() {
   clearSkipLimitTimer();
   const socket = callSocket;
@@ -770,6 +1091,7 @@ function cleanupCall() {
   const stream = localAudioStream;
   const session = callSession;
 
+  stopCallDuration(session);
   if (session) {
     stopBrowserSpeechRecognition(session);
     closeAudioChunkCapture(session);
@@ -823,13 +1145,19 @@ function cleanupCall() {
   remoteAudio.srcObject = null;
   callPanel.classList.remove("is-connected");
   muteButton.disabled = true;
-  muteButton.textContent = "Mute microphone";
+  updateMuteControl(false);
+  setCallConnectionState("disconnected");
   startCallButton.classList.add("hidden");
   startCallButton.disabled = false;
+  remoteAudioRetryButton.classList.add("hidden");
 }
 
-function startMicrophone(session) {
-  if (session !== callSession || localAudioStream) return;
+async function startMicrophone(session) {
+  if (
+    session !== callSession ||
+    localAudioStream ||
+    session.microphoneRequestPending
+  ) return;
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     updateCallStatus(
@@ -840,53 +1168,62 @@ function startMicrophone(session) {
     return;
   }
 
+  session.microphoneRequestPending = true;
   startCallButton.disabled = true;
   startCallButton.classList.remove("hidden");
   updateCallStatus("Requesting microphone permission...");
 
-  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-    .then((stream) => {
-      if (session !== callSession) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (error) {
+    if (session !== callSession) return;
 
-      localAudioStream = stream;
-      session.microphoneError = null;
-      muteButton.disabled = false;
-      startCallButton.classList.add("hidden");
-      setTranscriptStatus("Microphone ready. Waiting for the audio call to connect.");
-      maybeStartCallNegotiation(session);
-      if (session.pendingOffer) {
-        const pendingOffer = session.pendingOffer;
-        session.pendingOffer = null;
-        handleCallSignal(pendingOffer, session).catch((error) => {
-          if (session === callSession) {
-            updateCallStatus(`Audio negotiation failed: ${error.message}`);
-          }
-        });
-      }
-    })
-    .catch((error) => {
-      if (session !== callSession) return;
+    const message =
+      error.name === "NotAllowedError" || error.name === "PermissionDeniedError"
+        ? "Microphone permission was denied. Allow microphone access in your browser, then retry."
+        : error.name === "NotFoundError"
+          ? "No microphone was found. Connect a microphone and retry."
+          : `Could not access the microphone: ${error.message}`;
+    session.microphoneError = message;
+    setTranscriptStatus(
+      `${message} Transcription is unavailable until microphone access is granted.`,
+      "unavailable"
+    );
+    updateCallStatus(
+      callSocket?.readyState === WebSocket.OPEN
+        ? `${message} Signaling is connected; retry microphone access to continue.`
+        : message
+    );
+    startCallButton.textContent = "Retry microphone access";
+    startCallButton.disabled = false;
+    startCallButton.classList.remove("hidden");
+    return;
+  } finally {
+    session.microphoneRequestPending = false;
+  }
 
-      const message =
-        error.name === "NotAllowedError" || error.name === "PermissionDeniedError"
-          ? "Microphone permission was denied. Allow microphone access in your browser, then retry."
-          : error.name === "NotFoundError"
-            ? "No microphone was found. Connect a microphone and retry."
-            : `Could not access the microphone: ${error.message}`;
-      session.microphoneError = message;
-      setTranscriptStatus(`${message} Transcription is unavailable until microphone access is granted.`);
-      updateCallStatus(
-        callSocket?.readyState === WebSocket.OPEN
-          ? `${message} Signaling is connected; retry microphone access to continue.`
-          : message
-      );
-      startCallButton.textContent = "Retry microphone access";
-      startCallButton.disabled = false;
-      startCallButton.classList.remove("hidden");
+  if (session !== callSession) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+
+  localAudioStream = stream;
+  session.microphoneError = null;
+  muteButton.disabled = false;
+  startCallButton.classList.add("hidden");
+  setTranscriptStatus("Microphone ready. Waiting for the audio call to connect.", "waiting");
+  maybeStartCallNegotiation(session);
+  if (session.pendingOffer) {
+    const pendingOffer = session.pendingOffer;
+    session.pendingOffer = null;
+    handleCallSignal(pendingOffer, session).catch((error) => {
+      if (session === callSession) {
+        pauseCallUi(session);
+        updateCallStatus(`Audio negotiation failed: ${error.message}`);
+      }
     });
+  }
 }
 
 function createCallPeerConnection(session) {
@@ -914,7 +1251,10 @@ function createCallPeerConnection(session) {
     if (session !== callSession) return;
     remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
     remoteAudio.play().catch(() => {
-      updateCallStatus("Your partner is connected. Press play on the audio player to hear them.");
+      remoteAudioRetryButton.classList.remove("hidden");
+      updateCallStatus(
+        "Your partner is connected, but browser playback needs your permission."
+      );
     });
   };
 
@@ -923,16 +1263,17 @@ function createCallPeerConnection(session) {
 
     if (connection.connectionState === "connected") {
       callPanel.classList.add("is-connected");
+      setCallConnectionState("connected");
       updateCallStatus("Audio call connected.");
       session.callConnected = true;
+      startCallDuration(session);
       startCallTranscription(session);
     } else {
       callPanel.classList.remove("is-connected");
       if (connection.connectionState === "disconnected" || connection.connectionState === "failed" || connection.connectionState === "closed") {
-        session.callConnected = false;
-        stopBrowserSpeechRecognition(session);
-        closeAudioChunkCapture(session);
-        setTranscriptStatus("Transcription paused because the audio call is disconnected.");
+        pauseCallUi(session);
+      } else if (connection.connectionState === "connecting") {
+        setCallConnectionState("connecting");
       }
     }
 
@@ -1087,6 +1428,7 @@ async function maybeStartCallNegotiation(session) {
     }
     updateCallStatus("Calling your partner...");
   } catch (error) {
+    pauseCallUi(session);
     updateCallStatus(`Could not start the audio connection: ${error.message}`);
   } finally {
     session.makingOffer = false;
@@ -1108,8 +1450,12 @@ function startCall(match) {
     readyAckSent: false,
     pendingOffer: null,
     microphoneError: null,
+    microphoneRequestPending: false,
     pendingCandidates: [],
     callConnected: false,
+    callDurationMs: 0,
+    connectedAt: null,
+    durationTimer: null,
     transcriptionReady: false,
     transcriptionSequence: 0,
     transcriptionStreamId: createTranscriptionStreamId(),
@@ -1118,7 +1464,14 @@ function startCall(match) {
     transcriptionSocket: null,
     speechRecognition: null,
     speechRecognitionActive: false,
+    speechRecognitionStarting: false,
+    speechRecognitionRequested: false,
+    speechNeedsUserGesture: false,
+    speechRestartAttempts: 0,
     speechRestartTimer: null,
+    speechStartTimer: null,
+    speechStartedAt: null,
+    speechLastFinalIndex: -1,
     audioContext: null,
     audioSource: null,
     audioWorklet: null,
@@ -1126,17 +1479,31 @@ function startCall(match) {
   };
   callSession = session;
   clearPrivateTranscript();
-  setTranscriptStatus("Waiting for the call and transcription channels to connect.");
+  callDuration.textContent = "00:00";
+  setCallConnectionState("connecting");
+  setTranscriptStatus(
+    "Your private browser transcript will be available after the call connects.",
+    "waiting"
+  );
+  setServerTranscriptStatus("Faster-Whisper is connecting separately.");
+  browserTranscriptButton.classList.add("hidden");
   startCallButton.textContent = "Enable microphone and start audio";
-  startCallButton.classList.add("hidden");
+  startCallButton.disabled = false;
+  startCallButton.classList.remove("hidden");
   muteButton.disabled = true;
+  updateMuteControl(false);
+  callPanel.classList.remove("is-connected");
+  transcriptToggle.setAttribute("aria-expanded", "false");
+  transcriptContent.classList.add("hidden");
   remoteAudio.srcObject = null;
+  remoteAudioRetryButton.classList.add("hidden");
 
   let signalingUrl;
   try {
     signalingUrl = new URL(createCallSocketUrl(match.conversation_id));
     callSocket = new WebSocket(signalingUrl.toString());
   } catch (error) {
+    setCallConnectionState("disconnected");
     updateCallStatus(`Could not open call signaling: ${error.message}`);
     startCallButton.textContent = "End the call and try again";
     return;
@@ -1154,7 +1521,7 @@ function startCall(match) {
         message = JSON.parse(event.data);
       } catch (error) {
         console.error("Invalid transcription response:", error);
-        setTranscriptStatus("The server returned an invalid transcription response.");
+        setServerTranscriptStatus("The Faster-Whisper channel returned an invalid response.");
         return;
       }
 
@@ -1165,7 +1532,7 @@ function startCall(match) {
         session.transcriptionSpeakerId = message.speaker_id;
         session.transcriptionReady = true;
         if (session.userId && session.transcriptionSpeakerId !== session.userId) {
-          setTranscriptStatus("The transcription connection authenticated a different speaker.");
+          setServerTranscriptStatus("Faster-Whisper authenticated a different speaker.");
           session.transcriptionReady = false;
         } else {
           startAudioChunkCapture(session);
@@ -1174,7 +1541,7 @@ function startCall(match) {
         if (message.sequence === session.serverChunkPendingSequence) {
           session.serverChunkPendingSequence = null;
         }
-        setTranscriptStatus(message.message || "Server transcription failed for an audio chunk.");
+        setServerTranscriptStatus(message.message || "Faster-Whisper failed for an audio chunk.");
       } else if (
         (message.type === "transcription_result" || message.type === "chunk_duplicate") &&
         message.sequence === session.serverChunkPendingSequence
@@ -1184,20 +1551,18 @@ function startCall(match) {
     };
     session.transcriptionSocket.onerror = () => {
       if (session === callSession) {
-        setTranscriptStatus("Server transcription is unavailable; the audio call can continue.");
+        setServerTranscriptStatus("Faster-Whisper is unavailable; the audio call can continue.");
       }
     };
     session.transcriptionSocket.onclose = (event) => {
       if (session === callSession && event.code !== 1000) {
         session.transcriptionReady = false;
-        setTranscriptStatus(
-          "The server transcription channel disconnected. The audio call can continue."
-        );
+        setServerTranscriptStatus("The Faster-Whisper channel disconnected; the audio call can continue.");
       }
     };
   } catch (error) {
-    setTranscriptStatus(
-      `Could not open server transcription: ${error.message}. Browser transcription may still work.`
+    setServerTranscriptStatus(
+      `Could not open Faster-Whisper: ${error.message}. Browser transcription remains independent.`
     );
   }
 
@@ -1234,7 +1599,7 @@ function startCall(match) {
       ) {
         session.transcriptionReady = false;
         session.transcriptionSocket?.close(1008, "Speaker identity mismatch");
-        setTranscriptStatus("The transcription connection authenticated a different speaker.");
+        setServerTranscriptStatus("Faster-Whisper authenticated a different speaker.");
       }
       startAudioChunkCapture(session);
       const announceReady = () => {
@@ -1255,6 +1620,7 @@ function startCall(match) {
         await handleCallSignal(message, session);
       } catch (error) {
         if (session === callSession) {
+          pauseCallUi(session);
           updateCallStatus(`Audio negotiation failed: ${error.message}`);
         }
       }
@@ -1263,23 +1629,58 @@ function startCall(match) {
 
   socket.onerror = () => {
     if (session === callSession) {
+      pauseCallUi(session);
       updateCallStatus("Signaling error. Check your network and try ending the call.");
     }
   };
 
   socket.onclose = (event) => {
     if (session === callSession) {
+      pauseCallUi(session);
       updateCallStatus(
         `Signaling disconnected (${event.code}). Automatic reconnection is not available; end the call and start a new search.`
       );
     }
   };
 
-  startMicrophone(session);
 }
 
 startCallButton.addEventListener("click", () => {
   if (callSession) startMicrophone(callSession);
+});
+
+remoteAudioRetryButton.addEventListener("click", () => {
+  if (!remoteAudio.srcObject) return;
+  remoteAudioRetryButton.disabled = true;
+  remoteAudio.play()
+    .then(() => {
+      remoteAudioRetryButton.classList.add("hidden");
+      updateCallStatus("Audio call connected.");
+    })
+    .catch((error) => {
+      updateCallStatus(`Browser audio playback could not start: ${error.message}`);
+    })
+    .finally(() => {
+      remoteAudioRetryButton.disabled = false;
+    });
+});
+
+browserTranscriptButton.addEventListener("click", () => {
+  const session = callSession;
+  if (!session) return;
+  if (session.speechRecognitionActive || session.speechRecognitionStarting) {
+    stopBrowserSpeechRecognition(session);
+    setTranscriptStatus("Browser transcript paused. Tap Start live transcript to resume.", "paused");
+    updateBrowserTranscriptButton(session);
+    return;
+  }
+  startBrowserSpeechRecognition(session, true);
+});
+
+transcriptToggle.addEventListener("click", () => {
+  const expanded = transcriptToggle.getAttribute("aria-expanded") === "true";
+  transcriptToggle.setAttribute("aria-expanded", String(!expanded));
+  transcriptContent.classList.toggle("hidden", expanded);
 });
 
 muteButton.addEventListener("click", () => {
@@ -1288,24 +1689,51 @@ muteButton.addEventListener("click", () => {
   localAudioStream.getAudioTracks().forEach((track) => {
     track.enabled = !enabled;
   });
-  muteButton.textContent = enabled ? "Unmute microphone" : "Mute microphone";
+  updateMuteControl(enabled);
   if (enabled) {
-    stopBrowserSpeechRecognition(callSession);
+    const resumeBrowserTranscript = Boolean(callSession?.speechRecognitionRequested);
+    stopBrowserSpeechRecognition(callSession, resumeBrowserTranscript);
+    if (resumeBrowserTranscript && callSession) {
+      setTranscriptStatus("Browser transcript paused while your microphone is muted.", "paused");
+      updateBrowserTranscriptButton(callSession);
+    }
     callSession?.audioContext?.suspend().catch((error) => {
       console.warn("Could not pause server transcription:", error.message);
     });
-    setTranscriptStatus("Transcription paused while your microphone is muted.");
   } else if (callSession) {
-    startBrowserSpeechRecognition(callSession);
+    if (callSession.speechRecognitionRequested) {
+      startBrowserSpeechRecognition(callSession, true);
+    }
     if (callSession.audioContext) {
       callSession.audioContext.resume().catch((error) => {
-        setTranscriptStatus(`Server transcription could not resume: ${error.message}`);
+        setServerTranscriptStatus(`Faster-Whisper could not resume: ${error.message}`);
       });
     } else {
       startAudioChunkCapture(callSession);
     }
   }
   updateCallStatus(enabled ? "Microphone muted." : "Microphone unmuted.");
+});
+
+document.addEventListener("visibilitychange", () => {
+  const session = callSession;
+  if (!session?.speechRecognitionRequested) return;
+
+  if (document.visibilityState !== "visible") {
+    session.speechNeedsUserGesture = true;
+    stopBrowserSpeechRecognition(session, true);
+    updateBrowserTranscriptButton(session);
+    setTranscriptStatus(
+      "Browser transcript paused while this page is in the background. Return and tap Resume live transcript.",
+      "paused"
+    );
+  } else if (session.speechNeedsUserGesture && session.callConnected) {
+    updateBrowserTranscriptButton(session);
+    setTranscriptStatus(
+      "Tap Resume live transcript to continue after the browser interruption.",
+      "paused"
+    );
+  }
 });
 
 endCallButton.addEventListener("click", async () => {
