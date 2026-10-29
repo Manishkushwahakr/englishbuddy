@@ -72,6 +72,30 @@ def store_transcript(
         return True
 
 
+def discard_transcript(
+    conversation_id: str,
+    speaker_id: str,
+    stream_id: str,
+    sequence: int,
+):
+    key = (speaker_id, stream_id, sequence)
+    with _lock:
+        session = _sessions.get(conversation_id)
+        if not session:
+            return
+
+        session["keys"].discard(key)
+        for index, chunk in enumerate(session["chunks"]):
+            if (
+                chunk["speaker_id"],
+                chunk["stream_id"],
+                chunk["sequence"],
+            ) == key:
+                session["characters"] -= len(chunk["text"])
+                del session["chunks"][index]
+                break
+
+
 def clear_conversation_transcript(conversation_id: str):
     with _lock:
         _sessions.pop(conversation_id, None)

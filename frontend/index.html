@@ -111,7 +111,7 @@
           <div class="info-row"><span class="status-dot"></span><span>Audio-only conversations</span></div>
           <div class="info-row"><span class="status-dot"></span><span>Personal speech-to-text</span></div>
           <div class="info-row"><span class="status-dot"></span><span>No video required</span></div>
-          <p class="small muted">AI feedback will be added in a later phase.</p>
+          <p class="small muted">After your call, you can review language from the saved transcript.</p>
         </div>
       </div>
     </section>
@@ -170,7 +170,7 @@
               <button id="end-call-btn" class="control-button control-button-end" type="button" aria-label="End call">
                 <svg class="control-icon end-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.8 14.1a11.4 11.4 0 0 1 14.4 0l1.1.9a1.6 1.6 0 0 1 .3 2.2l-1.2 1.6a1.6 1.6 0 0 1-1.9.5l-2.9-1.2a1.6 1.6 0 0 1-1-1.5v-1a9.7 9.7 0 0 0-3.2 0v1a1.6 1.6 0 0 1-1 1.5l-2.9 1.2a1.6 1.6 0 0 1-1.9-.5l-1.2-1.6a1.6 1.6 0 0 1 .3-2.2l1.1-.9Z"/></svg>
               </button>
-              <span class="control-label">End Call</span>
+              <span class="control-label">End &amp; Review</span>
             </div>
             <div class="call-control">
               <button id="skip-partner-btn" class="control-button" type="button" aria-label="Skip partner">
@@ -212,6 +212,91 @@
         </div>
       </div>
     </section>
+
+    <!-- Post-call review -->
+    <section id="review-view" class="view" aria-labelledby="review-title">
+      <div class="review-shell">
+        <div class="page-heading review-heading">
+          <span class="eyebrow">YOUR PRACTICE SESSION</span>
+          <h1 id="review-title">Your English Review</h1>
+          <p class="muted">A friendly look at the language from your conversation.</p>
+        </div>
+
+        <div id="review-loading" class="panel review-state hidden" role="status" aria-live="polite">
+          <div class="loader" aria-hidden="true"></div>
+          <h2>Preparing your review</h2>
+          <p class="muted">We’re reading your saved transcript and checking your English.</p>
+        </div>
+
+        <div id="review-error" class="panel review-state hidden" role="alert">
+          <h2 id="review-error-title">Your review could not be prepared</h2>
+          <p id="review-error-message" class="muted"></p>
+          <div class="review-actions">
+            <button id="review-retry-btn" class="btn btn-primary" type="button">Try again</button>
+            <button id="review-dashboard-btn" class="btn btn-outline" type="button">Back to dashboard</button>
+          </div>
+        </div>
+
+        <div id="review-content" class="hidden" aria-live="polite">
+          <section class="panel review-overview" aria-labelledby="review-summary-title">
+            <div class="review-complete">
+              <span class="review-complete-mark" aria-hidden="true">✓</span>
+              <span>Review complete</span>
+            </div>
+            <h2 id="review-summary-title">Your conversation</h2>
+            <p id="review-summary" class="review-summary"></p>
+            <dl class="review-counts">
+              <div><dt>Grammar corrections</dt><dd id="grammar-count">0</dd></div>
+              <div><dt>Repeated words</dt><dd id="repeated-count">0</dd></div>
+              <div><dt>Improvement areas</dt><dd id="improvement-count">0</dd></div>
+            </dl>
+          </section>
+
+          <section class="review-section" aria-labelledby="grammar-title">
+            <div class="review-section-heading">
+              <span class="eyebrow">CLEARER SENTENCES</span>
+              <h2 id="grammar-title">Grammar corrections</h2>
+            </div>
+            <div id="grammar-list" class="review-card-list"></div>
+          </section>
+
+          <section class="review-section" aria-labelledby="repeated-title">
+            <div class="review-section-heading">
+              <span class="eyebrow">SPEAK WITH EASE</span>
+              <h2 id="repeated-title">Repeated words</h2>
+            </div>
+            <div id="repeated-list" class="review-card-list"></div>
+          </section>
+
+          <section class="review-section" aria-labelledby="improvement-title">
+            <div class="review-section-heading">
+              <span class="eyebrow">A LITTLE PRACTICE</span>
+              <h2 id="improvement-title">Areas to improve</h2>
+            </div>
+            <div id="improvement-list" class="review-card-list"></div>
+          </section>
+
+          <section class="review-section" aria-labelledby="feedback-title">
+            <div class="review-section-heading">
+              <span class="eyebrow">WHAT WENT WELL</span>
+              <h2 id="feedback-title">Speaker feedback</h2>
+            </div>
+            <div id="feedback-list" class="review-card-list"></div>
+          </section>
+
+          <details class="panel review-transcript">
+            <summary>Read the transcript used for this review</summary>
+            <div id="review-transcript-content" class="review-transcript-content"></div>
+          </details>
+
+          <div class="review-actions review-footer-actions">
+            <button id="review-again-btn" class="btn btn-outline" type="button">Analyze again</button>
+            <button id="review-dashboard-success-btn" class="btn btn-primary" type="button">Back to dashboard</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer class="app-footer">ImproBuddy · Practice English with confidence</footer>

@@ -2,8 +2,6 @@
 import io
 import threading
 
-from faster_whisper import WhisperModel
-
 _model = None
 _model_lock = threading.Lock()
 
@@ -14,6 +12,8 @@ def get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                from faster_whisper import WhisperModel
+
                 _model = WhisperModel(
                     "small",
                     device="cpu",

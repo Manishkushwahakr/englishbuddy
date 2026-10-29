@@ -1,6 +1,7 @@
 
 const API_BASE = (window.IMPROBUDDY_API_BASE || "").replace(/\/+$/, "");
 const TOKEN_KEY = "improbuddy_access_token";
+let currentUserId = null;
 
 // DOM elements
 const notice = document.getElementById("notice");
@@ -76,11 +77,13 @@ async function apiRequest(path, options = {}) {
   if (!response.ok) {
     if (
       token &&
-      (response.status === 401 || response.status === 403) &&
+      response.status === 401 &&
       path !== "/auth/login" &&
       path !== "/auth/register"
     ) {
       localStorage.removeItem(TOKEN_KEY);
+      currentUserId = null;
+      reviewState = { conversationId: null, transcript: null, inFlight: false };
       userEmail.textContent = "";
       userArea.classList.add("hidden");
       const error = new Error(
@@ -140,12 +143,19 @@ function showView(viewId) {
 // Display the dashboard
 async function loadDashboard({ signal } = {}) {
   const user = await apiRequest("/auth/me", { signal });
+  currentUserId = user.id;
   userEmail.textContent = user.email;
   userArea.classList.remove("hidden");
   showView("dashboard-view");
   hideNotice();
 
   try {
+    if (!getToken()) {
+      const error = new Error("Please log in to view your conversation review.");
+      error.status = 401;
+      throw error;
+    }
+
     await apiRequest("/profile", { signal });
   } catch (error) {
     if (error.sessionExpired || signal?.aborted) {
@@ -191,6 +201,8 @@ loginForm.addEventListener("submit", async (event) => {
   } catch (error) {
     clearTimeout(timeout);
     localStorage.removeItem(TOKEN_KEY);
+    currentUserId = null;
+    reviewState = { conversationId: null, transcript: null, inFlight: false };
     userEmail.textContent = "";
     userArea.classList.add("hidden");
     showView("auth-view");
@@ -281,6 +293,8 @@ if (logoutButton) {
     }
 
     localStorage.removeItem(TOKEN_KEY);
+    currentUserId = null;
+    reviewState = { conversationId: null, transcript: null, inFlight: false };
     userEmail.textContent = "";
     userArea.classList.add("hidden");
     showView("auth-view");
@@ -316,6 +330,18 @@ const transcriptStatus = document.getElementById("transcript-status");
 const serverTranscriptStatus = document.getElementById("server-transcript-status");
 const transcriptInterim = document.getElementById("transcript-interim");
 const transcriptList = document.getElementById("transcript-list");
+const reviewLoading = document.getElementById("review-loading");
+const reviewError = document.getElementById("review-error");
+const reviewErrorText = document.getElementById("review-error-message");
+const reviewContent = document.getElementById("review-content");
+const reviewRetryButton = document.getElementById("review-retry-btn");
+const reviewAgainButton = document.getElementById("review-again-btn");
+const REVIEW_MAX_TRANSCRIPT_CHARACTERS = 30_000;
+let reviewState = {
+  conversationId: null,
+  transcript: null,
+  inFlight: false,
+};
 const MATCHING_POLL_INTERVAL = 2000;
 let matchingPollTimer = null;
 let matchingFlowId = 0;
@@ -327,6 +353,273 @@ let callSocket = null;
 let peerConnection = null;
 let localAudioStream = null;
 let skipLimitTimer = null;
+
+function reviewElement(tagName, className, content) {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  if (content !== undefined) element.textContent = content;
+  return element;
+}
+
+function renderReviewTranscript(segments) {
+  const speakerLabels = new Map();
+  let nextSpeakerNumber = 0;
+  const lines = [];
+  const transcriptParts = [];
+
+  for (const segment of segments) {
+    if (
+      typeof segment.speaker_id !== "string" ||
+      typeof segment.transcript_text !== "string" ||
+      !segment.transcript_text.trim()
+    ) {
+      continue;
+    }
+
+    let speakerLabel = speakerLabels.get(segment.speaker_id);
+    if (!speakerLabel) {
+      speakerLabel = currentUserId
+        ? segment.speaker_id === currentUserId ? "You" : "Partner"
+        : `Speaker ${nextSpeakerNumber + 1}`;
+      speakerLabels.set(segment.speaker_id, speakerLabel);
+      nextSpeakerNumber += 1;
+    }
+
+    const text = segment.transcript_text.trim();
+    transcriptParts.push(`${speakerLabel}: ${text}`);
+    const line = reviewElement("p", "review-transcript-line");
+    const speaker = reviewElement("strong", "review-speaker", `${speakerLabel}: `);
+    line.append(speaker, document.createTextNode(text));
+    lines.push(line);
+  }
+
+  return {
+    text: transcriptParts.join("\n"),
+    lines,
+  };
+}
+
+function appendReviewEmpty(container, message) {
+  container.replaceChildren(reviewElement("p", "review-empty", message));
+}
+
+function renderReviewAnalysis(analysis) {
+  const requiredArrays = [
+    "grammar_mistakes",
+    "repeated_words",
+    "areas_of_improvement",
+    "speaker_feedback",
+  ];
+  if (
+    !analysis ||
+    typeof analysis.overall_summary !== "string" ||
+    requiredArrays.some((key) => !Array.isArray(analysis[key]))
+  ) {
+    throw new Error("The review response was incomplete. Please try again.");
+  }
+
+  document.getElementById("review-summary").textContent = analysis.overall_summary;
+  document.getElementById("grammar-count").textContent =
+    analysis.grammar_mistakes.length;
+  document.getElementById("repeated-count").textContent =
+    analysis.repeated_words.length;
+  document.getElementById("improvement-count").textContent =
+    analysis.areas_of_improvement.length;
+
+  const grammarList = document.getElementById("grammar-list");
+  grammarList.replaceChildren();
+  if (analysis.grammar_mistakes.length === 0) {
+    appendReviewEmpty(grammarList, "No grammar corrections were identified in this conversation.");
+  } else {
+    for (const item of analysis.grammar_mistakes) {
+      const card = reviewElement("article", "review-card grammar-card");
+      card.append(
+        reviewElement("span", "review-speaker", item.speaker),
+        reviewElement("span", "review-category", item.category),
+      );
+      const comparison = reviewElement("div", "grammar-comparison");
+      const original = reviewElement("div", "grammar-original");
+      original.append(
+        reviewElement("span", "review-field-label", "You said"),
+        reviewElement("p", "", item.original_sentence),
+      );
+      const corrected = reviewElement("div", "grammar-corrected");
+      corrected.append(
+        reviewElement("span", "review-field-label", "A clearer version"),
+        reviewElement("p", "", item.corrected_sentence),
+      );
+      comparison.append(original, corrected);
+      card.append(
+        comparison,
+        reviewElement("p", "review-explanation", item.explanation),
+      );
+      grammarList.append(card);
+    }
+  }
+
+  const repeatedList = document.getElementById("repeated-list");
+  repeatedList.replaceChildren();
+  if (analysis.repeated_words.length === 0) {
+    appendReviewEmpty(repeatedList, "No repeated words were identified.");
+  } else {
+    for (const item of analysis.repeated_words) {
+      const card = reviewElement("article", "review-card repeated-card");
+      card.append(
+        reviewElement("h3", "review-card-title", item.word),
+        reviewElement(
+          "p",
+          "review-card-meta",
+          `${item.speaker} · ${item.count} ${item.count === 1 ? "time" : "times"}`,
+        ),
+        reviewElement(
+          "p",
+          "review-explanation",
+          "This word appeared more than once in the conversation. Repetition is a normal part of speaking.",
+        ),
+      );
+      repeatedList.append(card);
+    }
+  }
+
+  const improvementList = document.getElementById("improvement-list");
+  improvementList.replaceChildren();
+  if (analysis.areas_of_improvement.length === 0) {
+    appendReviewEmpty(improvementList, "No specific practice areas were identified this time.");
+  } else {
+    for (const item of analysis.areas_of_improvement) {
+      const card = reviewElement("article", "review-card");
+      card.append(
+        reviewElement("span", "review-speaker", item.speaker),
+        reviewElement("h3", "review-card-title", item.area),
+        reviewElement("p", "review-explanation", item.reason),
+        reviewElement("p", "review-recommendation", item.recommendation),
+      );
+      improvementList.append(card);
+    }
+  }
+
+  const feedbackList = document.getElementById("feedback-list");
+  feedbackList.replaceChildren();
+  if (analysis.speaker_feedback.length === 0) {
+    appendReviewEmpty(feedbackList, "No speaker feedback was returned.");
+  } else {
+    for (const item of analysis.speaker_feedback) {
+      const card = reviewElement("article", "review-card feedback-card");
+      card.append(reviewElement("h3", "review-card-title", item.speaker));
+      if (item.strengths.length === 0) {
+        card.append(reviewElement("p", "review-empty", "No specific strengths were listed."));
+      } else {
+        const strengths = document.createElement("ul");
+        strengths.className = "review-strengths";
+        for (const strength of item.strengths) {
+          strengths.append(reviewElement("li", "", strength));
+        }
+        card.append(strengths);
+      }
+      feedbackList.append(card);
+    }
+  }
+}
+
+function getReviewErrorMessage(error) {
+  if (error.sessionExpired) {
+    return "Your login has expired. Please log in again to view your review.";
+  }
+  if (error.status === 401) {
+    return "Please log in to view your conversation review.";
+  }
+  if (error.status === 403) {
+    return "You can only view a review for a conversation you participated in.";
+  }
+  if (error.status === 404) {
+    return "No saved transcript was found for this conversation. Check that speech transcription was available during the call.";
+  }
+  if (error.status === 400 || error.status === 422) {
+    return error.status === 422
+      ? "The saved transcript could not be validated. Please try again or choose another conversation."
+      : error.message || "The transcript is empty or could not be analyzed. Try another conversation.";
+  }
+  if (error.status === 502 || error.status === 503) {
+    return "The AI review service is temporarily unavailable. Please try again.";
+  }
+  if (error.status === 500) {
+    return "A server error prevented your transcript or review from loading or saving. Please try again.";
+  }
+  return error.message || "We could not prepare your review. Please try again.";
+}
+
+async function prepareConversationReview(conversationId) {
+  if (reviewState.inFlight) return;
+  reviewState.inFlight = true;
+  reviewLoading.classList.remove("hidden");
+  reviewError.classList.add("hidden");
+  reviewContent.classList.add("hidden");
+  reviewRetryButton.disabled = true;
+  reviewAgainButton.disabled = true;
+
+  try {
+    if (!reviewState.transcript) {
+      const transcriptResponse = await apiRequest(
+        `/llm/transcripts/${encodeURIComponent(conversationId)}`,
+      );
+      if (transcriptResponse.conversation_id !== conversationId) {
+        throw new Error("The backend returned a transcript for a different conversation.");
+      }
+      if (!Array.isArray(transcriptResponse.segments) || transcriptResponse.segments.length === 0) {
+        const error = new Error(
+          "No saved transcript was found for this conversation. Check that speech transcription was available during the call.",
+        );
+        error.status = 404;
+        throw error;
+      }
+
+      const transcript = renderReviewTranscript(transcriptResponse.segments);
+      if (transcript.text.trim().length < 10) {
+        const error = new Error(
+          "The saved transcript is too short to create a useful review.",
+        );
+        error.status = 400;
+        throw error;
+      }
+      if (transcript.text.length > REVIEW_MAX_TRANSCRIPT_CHARACTERS) {
+        const error = new Error(
+          "This conversation transcript is longer than the review service currently accepts. No transcript was changed.",
+        );
+        error.status = 400;
+        throw error;
+      }
+      reviewState.transcript = transcript.text;
+      document.getElementById("review-transcript-content").replaceChildren(
+        ...transcript.lines,
+      );
+    }
+
+    const analysis = await apiRequest("/llm/analyze-transcript", {
+      method: "POST",
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        transcript: reviewState.transcript,
+      }),
+    });
+    renderReviewAnalysis(analysis);
+    reviewLoading.classList.add("hidden");
+    reviewContent.classList.remove("hidden");
+  } catch (error) {
+    reviewLoading.classList.add("hidden");
+    if (error.sessionExpired || error.status === 401) {
+      showView("auth-view");
+      showNotice(getReviewErrorMessage(error), "error");
+      return;
+    }
+    reviewErrorText.textContent = getReviewErrorMessage(error);
+    reviewError.classList.remove("hidden");
+  } finally {
+    reviewState.inFlight = false;
+    reviewRetryButton.disabled = false;
+    reviewAgainButton.disabled = false;
+    endCallButton.disabled = false;
+  }
+}
 
 function setTranscriptStatus(message, state = null) {
   transcriptStatus.textContent = message;
@@ -528,6 +821,48 @@ function createTranscriptionStreamId() {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function loadTranscriptionIdentity(conversationId) {
+  const storageKey = `improbuddy:transcription:${conversationId}`;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    if (
+      typeof saved?.streamId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(saved.streamId) &&
+      Number.isSafeInteger(saved.nextSequence) &&
+      saved.nextSequence >= 0
+    ) {
+      return {
+        storageKey,
+        streamId: saved.streamId,
+        nextSequence: saved.nextSequence,
+      };
+    }
+  } catch {
+    // Session storage can be unavailable in restricted browser contexts.
+  }
+
+  const identity = {
+    storageKey,
+    streamId: createTranscriptionStreamId(),
+    nextSequence: 0,
+  };
+  saveTranscriptionIdentity(identity);
+  return identity;
+}
+
+function saveTranscriptionIdentity(identity) {
+  if (!identity.streamId) return false;
+  try {
+    sessionStorage.setItem(identity.storageKey, JSON.stringify({
+      streamId: identity.streamId,
+      nextSequence: identity.nextSequence,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function startBrowserSpeechRecognition(session, fromUserGesture = false) {
@@ -826,6 +1161,15 @@ function sendAudioChunk(session, audioSamples, sourceRate) {
     }
 
     const sequence = session.transcriptionSequence++;
+    if (!saveTranscriptionIdentity({
+      storageKey: session.transcriptionStorageKey,
+      streamId: session.transcriptionStreamId,
+      nextSequence: session.transcriptionSequence,
+    })) {
+      setServerTranscriptStatus(
+        "Transcript retry protection could not be saved in this browser tab."
+      );
+    }
     message = {
       type: "audio_chunk",
       stream_id: session.transcriptionStreamId,
@@ -1438,6 +1782,7 @@ async function maybeStartCallNegotiation(session) {
 
 function startCall(match) {
   cleanupCall();
+  const transcriptionIdentity = loadTranscriptionIdentity(match.conversation_id);
   const session = {
     match,
     userId: null,
@@ -1458,8 +1803,9 @@ function startCall(match) {
     connectedAt: null,
     durationTimer: null,
     transcriptionReady: false,
-    transcriptionSequence: 0,
-    transcriptionStreamId: createTranscriptionStreamId(),
+    transcriptionSequence: transcriptionIdentity.nextSequence,
+    transcriptionStreamId: transcriptionIdentity.streamId,
+    transcriptionStorageKey: transcriptionIdentity.storageKey,
     audioChunkCaptureStarted: false,
     serverChunkPendingSequence: null,
     transcriptionSocket: null,
@@ -1739,12 +2085,18 @@ document.addEventListener("visibilitychange", () => {
 
 endCallButton.addEventListener("click", async () => {
   const conversationId = activeMatch?.conversation_id;
+  if (!conversationId || reviewState.inFlight) return;
+
+  reviewState = {
+    conversationId,
+    transcript: null,
+    inFlight: false,
+  };
+  endCallButton.disabled = true;
   cleanupCall();
   activeMatch = null;
-  showView("dashboard-view");
-  showNotice("Call ended.", "success");
-
-  if (!conversationId) return;
+  hideNotice();
+  showView("review-view");
 
   try {
     await apiRequest("/matching/end", {
@@ -1752,11 +2104,39 @@ endCallButton.addEventListener("click", async () => {
       body: JSON.stringify({ conversation_id: conversationId }),
     });
   } catch (error) {
+    if (error.sessionExpired) {
+      showView("auth-view");
+      showNotice(getReviewErrorMessage(error), "error");
+      endCallButton.disabled = false;
+      return;
+    }
     showNotice(
-      `The call ended on this device, but the server could not update the matching state: ${error.message}`,
-      "error"
+      `The call ended, but its matching status could not be updated: ${error.message}`,
+      "error",
     );
   }
+
+  await prepareConversationReview(conversationId);
+});
+
+reviewRetryButton.addEventListener("click", () => {
+  if (reviewState.conversationId) {
+    prepareConversationReview(reviewState.conversationId);
+  }
+});
+
+reviewAgainButton.addEventListener("click", () => {
+  if (reviewState.conversationId) {
+    prepareConversationReview(reviewState.conversationId);
+  }
+});
+
+document.getElementById("review-dashboard-btn").addEventListener("click", () => {
+  showView("dashboard-view");
+});
+
+document.getElementById("review-dashboard-success-btn").addEventListener("click", () => {
+  showView("dashboard-view");
 });
 
 skipPartnerButton.addEventListener("click", async () => {

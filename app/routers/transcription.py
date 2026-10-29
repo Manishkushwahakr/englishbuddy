@@ -5,16 +5,19 @@ import json
 import logging
 import struct
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.services.conversation_access import authorized_conversation_user
 from app.services.stt import transcribe_audio
+from app.services.transcript_persistence import persist_transcript_chunk
 from app.services.transcript_session import (
     claim_chunk,
+    discard_transcript,
     release_chunk,
     store_transcript,
 )
@@ -276,7 +279,6 @@ async def transcription_websocket(websocket: WebSocket, conversation_id: str):
                     audio_buffer = None
 
                 processed_at = datetime.now(timezone.utc).isoformat()
-                last_sequence_by_stream[stream_key] = sequence
 
                 text = transcript.strip()[:5_000]
                 authorized_user_id = await asyncio.to_thread(
@@ -295,7 +297,25 @@ async def transcription_websocket(websocket: WebSocket, conversation_id: str):
                     await websocket.close(code=1008)
                     return
 
-                if not store_transcript(
+                if not text:
+                    store_transcript(
+                        conversation_id,
+                        user_id,
+                        stream_id,
+                        sequence,
+                        parsed_capture_time.isoformat(),
+                        received_at,
+                        processed_at,
+                        duration_ms,
+                        text,
+                    )
+                    release_chunk(
+                        conversation_id,
+                        user_id,
+                        stream_id,
+                        sequence,
+                    )
+                elif not store_transcript(
                     conversation_id,
                     user_id,
                     stream_id,
@@ -304,7 +324,7 @@ async def transcription_websocket(websocket: WebSocket, conversation_id: str):
                     received_at,
                     processed_at,
                     duration_ms,
-                    text
+                    text,
                 ):
                     release_chunk(
                         conversation_id,
@@ -320,6 +340,45 @@ async def transcription_websocket(websocket: WebSocket, conversation_id: str):
                     await websocket.close(code=1013)
                     return
 
+                if text:
+                    if websocket.client_state != WebSocketState.CONNECTED:
+                        discard_transcript(
+                            conversation_id,
+                            user_id,
+                            stream_id,
+                            sequence,
+                        )
+                        claimed = False
+                        return
+
+                    try:
+                        await asyncio.to_thread(
+                            persist_transcript_chunk,
+                            conversation_id,
+                            user_id,
+                            stream_id,
+                            sequence,
+                            text,
+                            parsed_capture_time
+                            - timedelta(milliseconds=duration_ms),
+                            parsed_capture_time,
+                        )
+                    except SQLAlchemyError:
+                        discard_transcript(
+                            conversation_id,
+                            user_id,
+                            stream_id,
+                            sequence,
+                        )
+                        claimed = False
+                        await send_json(websocket, {
+                            "type": "stt_error",
+                            "sequence": sequence,
+                            "message": "Could not save this transcript chunk.",
+                        })
+                        continue
+
+                last_sequence_by_stream[stream_key] = sequence
                 await send_json(websocket, {
                     "type": "transcription_result",
                     "conversation_id": conversation_id,

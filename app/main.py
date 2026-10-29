@@ -12,6 +12,8 @@ from app.routers.matching import router as matching_router
 
 from app.routers.websocket import router as websocket_router
 from app.routers.transcription import router as transcription_router
+from app.llm import router as llm_router
+
 
 app = FastAPI(
     title="English Speaking Practice Platform",
@@ -41,6 +43,8 @@ app.include_router(profile_router)
 app.include_router(matching_router)
 app.include_router(websocket_router)
 app.include_router(transcription_router)
+app.include_router(llm_router)
+
 
 
 
