@@ -25,6 +25,8 @@ from app.schemas.matching import (
     CancelQueueResponse
 )
 from app.services.transcript_session import clear_conversation_transcript
+from app.services.conversation_lifecycle import end_conversation as end_conversation_state
+from app.routers.websocket import broadcast_call_event
 
 
 router = APIRouter(
@@ -234,7 +236,7 @@ def join_queue(
     "/skip",
     response_model=JoinQueueResponse
 )
-def skip_partner(
+async def skip_partner(
     data: SkipPartnerRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -348,6 +350,17 @@ def skip_partner(
     db.commit()
     db.refresh(new_queue_entry)
     clear_conversation_transcript(str(conversation.id))
+    await broadcast_call_event(
+        str(conversation.id),
+        exclude_user_id=str(current_user.id),
+        message={
+            "type": "call_ended",
+            "conversation_id": str(conversation.id),
+            "user_id": str(current_user.id),
+            "reason": "participant_skipped",
+            "message": "The other participant moved on to another practice partner.",
+        },
+    )
 
     return JoinQueueResponse(
         queue_id=str(new_queue_entry.id),
@@ -380,55 +393,42 @@ def get_skip_status(
     "/end",
     response_model=CancelQueueResponse
 )
-def end_conversation(
+async def end_conversation(
     data: EndConversationRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     db.query(User).filter(User.id == current_user.id).with_for_update().first()
-    conversation = (
-        db.query(Conversation)
-        .filter(Conversation.id == data.conversation_id)
-        .with_for_update()
-        .first()
+    state, _, changed = end_conversation_state(
+        db,
+        data.conversation_id,
+        current_user.id,
     )
-    if conversation is None:
+    if state == "not_found":
         raise HTTPException(status_code=404, detail="Conversation not found")
-
-    participant = (
-        db.query(ConversationParticipant)
-        .filter(
-            ConversationParticipant.conversation_id == conversation.id,
-            ConversationParticipant.user_id == current_user.id
-        )
-        .first()
-    )
-    if participant is None:
+    if state == "forbidden":
         raise HTTPException(
             status_code=403,
             detail="You are not a participant in this conversation"
         )
-
-    if conversation.status not in {"matched", "ended"}:
+    if state == "invalid_state":
         raise HTTPException(
             status_code=409,
             detail="This conversation cannot be ended"
         )
 
-    conversation.status = "ended"
-    conversation.ended_at = datetime.now(timezone.utc)
-    participant_ids = [
-        row[0]
-        for row in db.query(ConversationParticipant.user_id)
-        .filter(ConversationParticipant.conversation_id == conversation.id)
-        .all()
-    ]
-    db.query(MatchingQueue).filter(
-        MatchingQueue.user_id.in_(participant_ids),
-        MatchingQueue.status == "matched"
-    ).update({"status": "ended"}, synchronize_session=False)
-    db.commit()
-    clear_conversation_transcript(str(conversation.id))
+    if changed:
+        await broadcast_call_event(
+            str(data.conversation_id),
+            exclude_user_id=str(current_user.id),
+            message={
+                "type": "call_ended",
+                "conversation_id": str(data.conversation_id),
+                "user_id": str(current_user.id),
+                "reason": "participant_ended",
+                "message": "The other participant ended the call.",
+            },
+        )
 
     return CancelQueueResponse(
         status="ended",

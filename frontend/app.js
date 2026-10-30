@@ -1,6 +1,7 @@
 
 const API_BASE = (window.IMPROBUDDY_API_BASE || "").replace(/\/+$/, "");
 const TOKEN_KEY = "improbuddy_access_token";
+const API_REQUEST_TIMEOUT_MS = 120000;
 let currentUserId = null;
 
 // DOM elements
@@ -56,20 +57,43 @@ async function apiRequest(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
+  const requestController = new AbortController();
+  const sourceSignal = options.signal;
+  const relayAbort = () => requestController.abort(sourceSignal.reason);
+  if (sourceSignal?.aborted) {
+    relayAbort();
+  } else {
+    sourceSignal?.addEventListener("abort", relayAbort, { once: true });
+  }
+  const timeout = setTimeout(
+    () => requestController.abort(new DOMException("Request timed out", "TimeoutError")),
+    API_REQUEST_TIMEOUT_MS,
+  );
+
   let response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
+      signal: requestController.signal,
     });
   } catch (error) {
+    if (requestController.signal.aborted && !sourceSignal?.aborted) {
+      const timeoutError = new Error("The backend request timed out. Please try again.");
+      timeoutError.status = 408;
+      timeoutError.isTimeout = true;
+      throw timeoutError;
+    }
     if (error?.name !== "TypeError") {
       throw error;
     }
 
     throw new Error(
-      `Could not reach the backend at ${API_BASE}. The browser cannot distinguish a network failure from CORS blocking this origin (${window.location.origin}). Check the Render service and its FRONTEND_ORIGINS setting.`
+      `Could not connect to the backend at ${API_BASE}. The service may be starting or your network may be blocking the request. Please retry; if this continues, contact support.`
     );
+  } finally {
+    clearTimeout(timeout);
+    sourceSignal?.removeEventListener("abort", relayAbort);
   }
 
   const data = await response.json().catch(() => ({}));
@@ -337,6 +361,7 @@ const reviewContent = document.getElementById("review-content");
 const reviewRetryButton = document.getElementById("review-retry-btn");
 const reviewAgainButton = document.getElementById("review-again-btn");
 const REVIEW_MAX_TRANSCRIPT_CHARACTERS = 30_000;
+const CALL_RECONNECT_GRACE_MS = 15_000;
 let reviewState = {
   conversationId: null,
   transcript: null,
@@ -545,6 +570,9 @@ function getReviewErrorMessage(error) {
   if (error.status === 500) {
     return "A server error prevented your transcript or review from loading or saving. Please try again.";
   }
+  if (error.status === 408 || error.status === 504 || error.isTimeout) {
+    return "The review request took too long to finish. Your transcript has not been removed; please try again.";
+  }
   return error.message || "We could not prepare your review. Please try again.";
 }
 
@@ -639,6 +667,7 @@ function setCallConnectionState(state) {
   const labels = {
     connecting: "Connecting",
     connected: "Connected",
+    reconnecting: "Reconnecting",
     disconnected: "Disconnected",
   };
   callConnectionState.dataset.state = state;
@@ -704,12 +733,16 @@ function appendPrivateTranscript(text) {
   document.getElementById("transcript-empty")?.remove();
   const entry = document.createElement("p");
   entry.className = "transcript-entry";
-  entry.textContent = text;
+  const speaker = document.createElement("strong");
+  speaker.className = "transcript-speaker";
+  speaker.textContent = "You";
+  entry.append(speaker, document.createTextNode(` ${text}`));
   transcriptList.append(entry);
 
   while (transcriptList.children.length > 200) {
     transcriptList.firstElementChild?.remove();
   }
+  transcriptList.scrollTop = transcriptList.scrollHeight;
 }
 
 function speechRecognitionConstructor() {
@@ -1412,6 +1445,237 @@ function updateCallStatus(message) {
   callStatus.textContent = message;
 }
 
+function clearCallReconnectTimers(session) {
+  clearTimeout(session.signalingReconnectTimer);
+  clearTimeout(session.rtcDisconnectTimer);
+  session.signalingReconnectTimer = null;
+  session.rtcDisconnectTimer = null;
+}
+
+function finishCallForReview(session, { remote = false } = {}) {
+  if (session !== callSession || session.ending) return;
+
+  session.ending = true;
+  session.callEnded = true;
+  clearCallReconnectTimers(session);
+  const conversationId = session.match.conversation_id;
+  reviewState = {
+    conversationId,
+    transcript: null,
+    inFlight: false,
+  };
+  activeMatch = null;
+  document.getElementById("review-call-status").textContent = remote
+    ? "Call ended. Your partner has left the conversation."
+    : "Call ended. Your English review is ready.";
+  cleanupCall();
+  showView("review-view");
+  prepareConversationReview(conversationId);
+}
+
+async function endCallAndReview(session) {
+  if (!session || session !== callSession || session.ending) return;
+
+  const conversationId = session.match.conversation_id;
+  session.ending = true;
+  session.callEnded = true;
+  endCallButton.disabled = true;
+  sendCallSignal({ type: "hangup" }, session);
+  clearCallReconnectTimers(session);
+  reviewState = {
+    conversationId,
+    transcript: null,
+    inFlight: false,
+  };
+  cleanupCall();
+  activeMatch = null;
+  hideNotice();
+  document.getElementById("review-call-status").textContent =
+    "Call ended. Preparing your English review.";
+  showView("review-view");
+
+  try {
+    await apiRequest("/matching/end", {
+      method: "POST",
+      body: JSON.stringify({ conversation_id: conversationId }),
+    });
+  } catch (error) {
+    if (error.sessionExpired) {
+      showView("auth-view");
+      showNotice(getReviewErrorMessage(error), "error");
+      return;
+    }
+    showNotice(
+      `The call ended, but the server could not confirm its final status: ${getReviewErrorMessage(error)}`,
+      "error",
+    );
+  }
+
+  await prepareConversationReview(conversationId);
+}
+
+function finishCallAfterRtcDisconnect(session) {
+  if (session !== callSession || session.ending || session.rtcDisconnectTimer) return;
+
+  session.rtcDisconnectTimer = setTimeout(() => {
+    session.rtcDisconnectTimer = null;
+    endCallAndReview(session);
+  }, CALL_RECONNECT_GRACE_MS);
+}
+
+function scheduleCallSignalingReconnect(session) {
+  if (session !== callSession || session.ending || session.signalingReconnectTimer) {
+    return;
+  }
+
+  const delays = [1000, 2000, 4000, 8000];
+  const delay = delays[Math.min(session.signalingReconnectAttempt, delays.length - 1)];
+  session.signalingReconnectAttempt += 1;
+  setCallConnectionState("reconnecting");
+  updateCallStatus("Signaling interrupted. Reconnecting to your call...");
+  session.signalingReconnectTimer = setTimeout(() => {
+    session.signalingReconnectTimer = null;
+    connectCallSignaling(session);
+  }, delay);
+}
+
+async function handleCallSocketMessage(event, session) {
+  if (session !== callSession || session.ending) return;
+
+  let message;
+  try {
+    message = JSON.parse(event.data);
+  } catch (error) {
+    console.error("Invalid WebSocket signaling message:", error);
+    updateCallStatus("Received an invalid signaling message.");
+    return;
+  }
+  if (
+    message.conversation_id &&
+    message.conversation_id !== session.match.conversation_id
+  ) {
+    return;
+  }
+  const isPartnerEvent =
+    message.user_id &&
+    String(message.user_id) === String(session.match.partner_id);
+
+  if (message.type === "call_ended") {
+    if (!isPartnerEvent) return;
+    finishCallForReview(session, { remote: true });
+    return;
+  }
+  if (message.type === "peer_reconnecting") {
+    if (!isPartnerEvent) return;
+    setCallConnectionState("reconnecting");
+    updateCallStatus("Your partner’s connection was interrupted. Waiting for them to reconnect...");
+    return;
+  }
+  if (message.type === "peer_reconnected") {
+    if (!isPartnerEvent) return;
+    if (peerConnection?.connectionState === "connected") {
+      setCallConnectionState("connected");
+      updateCallStatus("Audio call connected.");
+    } else {
+      setCallConnectionState("connecting");
+      updateCallStatus("Your partner reconnected. Restoring the audio call...");
+    }
+    return;
+  }
+  if (message.type === "call_end_failed") {
+    if (!isPartnerEvent) return;
+    updateCallStatus(
+      "The server could not confirm that the call ended. Please end the call again or check your connection.",
+    );
+    return;
+  }
+
+  if (message.type === "connected") {
+    if (message.conversation_id !== session.match.conversation_id) {
+      updateCallStatus("Signaling connected to an unexpected conversation.");
+      return;
+    }
+    session.signalingReconnectAttempt = 0;
+    session.signalingHasConnected = true;
+    session.userId = String(message.user_id);
+    session.polite = session.userId.localeCompare(session.match.partner_id) > 0;
+    if (
+      session.transcriptionSpeakerId &&
+      session.transcriptionSpeakerId !== session.userId
+    ) {
+      session.transcriptionReady = false;
+      session.transcriptionSocket?.close(1008, "Speaker identity mismatch");
+      setServerTranscriptStatus("Faster-Whisper authenticated a different speaker.");
+    }
+    startAudioChunkCapture(session);
+    const announceReady = () => {
+      if (session !== callSession || session.partnerReady || session.ending) {
+        clearInterval(session.readyTimer);
+        session.readyTimer = null;
+        return;
+      }
+      sendCallSignal({ type: "ready" }, session);
+    };
+    announceReady();
+    if (!session.partnerReady) {
+      session.readyTimer = setInterval(announceReady, 1000);
+    }
+    maybeStartCallNegotiation(session);
+    return;
+  }
+
+  try {
+    await handleCallSignal(message, session);
+  } catch (error) {
+    if (session === callSession && !session.ending) {
+      pauseCallUi(session);
+      updateCallStatus(`Audio negotiation failed: ${error.message}`);
+    }
+  }
+}
+
+function connectCallSignaling(session) {
+  if (session !== callSession || session.ending) return;
+
+  let socket;
+  try {
+    socket = new WebSocket(createCallSocketUrl(session.match.conversation_id));
+  } catch (error) {
+    console.warn("Could not open call signaling:", error.message);
+    scheduleCallSignalingReconnect(session);
+    return;
+  }
+  callSocket = socket;
+
+  socket.onopen = () => {
+    if (session !== callSession || session.ending) return;
+    if (peerConnection?.connectionState === "connected") {
+      setCallConnectionState("connected");
+      updateCallStatus("Call signaling reconnected.");
+    } else {
+      setCallConnectionState("connecting");
+      updateCallStatus("Signaling connected. Preparing your audio call...");
+    }
+  };
+  socket.onmessage = (event) => {
+    handleCallSocketMessage(event, session);
+  };
+  socket.onerror = () => {
+    if (session === callSession && !session.ending) {
+      updateCallStatus("Signaling interrupted. Reconnecting to your call...");
+    }
+  };
+  socket.onclose = (event) => {
+    if (session !== callSession || session.ending) return;
+    if (event.code === 1008) {
+      finishCallForReview(session, { remote: true });
+      return;
+    }
+    if (callSocket === socket) callSocket = null;
+    scheduleCallSignalingReconnect(session);
+  };
+}
+
 function pauseCallUi(session) {
   if (session !== callSession) return;
   session.callConnected = false;
@@ -1436,6 +1700,7 @@ function cleanupCall() {
   const stream = localAudioStream;
   const session = callSession;
 
+  if (session) clearCallReconnectTimers(session);
   stopCallDuration(session);
   if (session) {
     stopBrowserSpeechRecognition(session);
@@ -1524,12 +1789,20 @@ async function startMicrophone(session) {
   } catch (error) {
     if (session !== callSession) return;
 
-    const message =
-      error.name === "NotAllowedError" || error.name === "PermissionDeniedError"
-        ? "Microphone permission was denied. Allow microphone access in your browser, then retry."
-        : error.name === "NotFoundError"
-          ? "No microphone was found. Connect a microphone and retry."
-          : `Could not access the microphone: ${error.message}`;
+    let message;
+    if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+      message =
+        "Microphone permission is blocked. Allow microphone access for this site in your browser’s site settings, then retry.";
+    } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+      message = "No microphone was found. Connect a microphone and retry.";
+    } else if (error.name === "NotReadableError" || error.name === "AbortError") {
+      message =
+        "The microphone is unavailable or being used by another app. Close other apps using it, then retry.";
+    } else if (error.name === "SecurityError") {
+      message = "Microphone access requires HTTPS or localhost. Open this site securely, then retry.";
+    } else {
+      message = `Could not access the microphone: ${error.message}`;
+    }
     session.microphoneError = message;
     setTranscriptStatus(
       `${message} Transcription is unavailable until microphone access is granted.`,
@@ -1571,6 +1844,32 @@ async function startMicrophone(session) {
   }
 }
 
+async function startMicrophoneIfPermissionGranted(session) {
+  if (!navigator.permissions?.query) return;
+
+  let permission;
+  try {
+    permission = await navigator.permissions.query({ name: "microphone" });
+  } catch (error) {
+    console.debug("Microphone permission state is unavailable:", error);
+    return;
+  }
+
+  if (session !== callSession) return;
+  if (permission.state === "granted") {
+    startMicrophone(session);
+  } else if (permission.state === "denied") {
+    const message =
+      "Microphone permission is blocked. Allow microphone access for this site in your browser’s site settings, then retry.";
+    session.microphoneError = message;
+    updateCallStatus(message);
+    startCallButton.textContent = "Retry microphone access";
+  } else {
+    updateCallStatus("Tap Start audio to allow microphone access and begin the call.");
+    startCallButton.textContent = "Start audio with microphone";
+  }
+}
+
 function createCallPeerConnection(session) {
   if (session !== callSession || peerConnection || !localAudioStream) return;
 
@@ -1607,6 +1906,8 @@ function createCallPeerConnection(session) {
     if (session !== callSession) return;
 
     if (connection.connectionState === "connected") {
+      clearTimeout(session.rtcDisconnectTimer);
+      session.rtcDisconnectTimer = null;
       callPanel.classList.add("is-connected");
       setCallConnectionState("connected");
       updateCallStatus("Audio call connected.");
@@ -1616,7 +1917,10 @@ function createCallPeerConnection(session) {
     } else {
       callPanel.classList.remove("is-connected");
       if (connection.connectionState === "disconnected" || connection.connectionState === "failed" || connection.connectionState === "closed") {
-        pauseCallUi(session);
+        if (connection.connectionState === "closed" || session.ending) return;
+        setCallConnectionState("reconnecting");
+        updateCallStatus("The audio connection was interrupted. Trying to reconnect...");
+        finishCallAfterRtcDisconnect(session);
       } else if (connection.connectionState === "connecting") {
         setCallConnectionState("connecting");
       }
@@ -1624,14 +1928,6 @@ function createCallPeerConnection(session) {
 
     if (connection.connectionState === "connecting") {
       updateCallStatus("Negotiating the audio connection...");
-    } else if (connection.connectionState === "disconnected") {
-      updateCallStatus(
-        "The audio connection was interrupted. Automatic reconnection is not available; wait briefly or end the call."
-      );
-    } else if (connection.connectionState === "failed") {
-      updateCallStatus(
-        "The audio connection failed. Network restrictions may require a TURN server; end the call and try matching again."
-      );
     }
   };
 }
@@ -1728,9 +2024,7 @@ async function handleCallSignal(message, session) {
   }
 
   if (message.type === "user_disconnected") {
-    updateCallStatus(
-      "Your partner disconnected. Automatic reconnection is not available; end the call and start a new search."
-    );
+    finishCallForReview(session, { remote: true });
   }
 }
 
@@ -1792,6 +2086,12 @@ function startCall(match) {
     settingRemoteAnswer: false,
     ignoreOffer: false,
     offerStarted: false,
+    ending: false,
+    callEnded: false,
+    signalingHasConnected: false,
+    signalingReconnectAttempt: 0,
+    signalingReconnectTimer: null,
+    rtcDisconnectTimer: null,
     readyTimer: null,
     readyAckSent: false,
     pendingOffer: null,
@@ -1834,7 +2134,7 @@ function startCall(match) {
   );
   setServerTranscriptStatus("Faster-Whisper is connecting separately.");
   browserTranscriptButton.classList.add("hidden");
-  startCallButton.textContent = "Enable microphone and start audio";
+  startCallButton.textContent = "Start audio with microphone";
   startCallButton.disabled = false;
   startCallButton.classList.remove("hidden");
   muteButton.disabled = true;
@@ -1845,18 +2145,6 @@ function startCall(match) {
   remoteAudio.srcObject = null;
   remoteAudioRetryButton.classList.add("hidden");
 
-  let signalingUrl;
-  try {
-    signalingUrl = new URL(createCallSocketUrl(match.conversation_id));
-    callSocket = new WebSocket(signalingUrl.toString());
-  } catch (error) {
-    setCallConnectionState("disconnected");
-    updateCallStatus(`Could not open call signaling: ${error.message}`);
-    startCallButton.textContent = "End the call and try again";
-    return;
-  }
-
-  const socket = callSocket;
   try {
     session.transcriptionSocket = new WebSocket(
       createCallSocketUrl(match.conversation_id, "/transcription")
@@ -1913,83 +2201,8 @@ function startCall(match) {
     );
   }
 
-  socket.onopen = () => {
-    if (session !== callSession) return;
-    updateCallStatus(
-      session.microphoneError
-        ? `${session.microphoneError} Signaling is connected; retry microphone access to continue.`
-        : "Signaling connected. Allow microphone access to start audio."
-    );
-  };
-
-  socket.onmessage = async (event) => {
-    if (session !== callSession) return;
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch (error) {
-      console.error("Invalid WebSocket signaling message:", error);
-      updateCallStatus("Received an invalid signaling message.");
-      return;
-    }
-
-    if (message.type === "connected") {
-      if (message.conversation_id !== match.conversation_id) {
-        updateCallStatus("Signaling connected to an unexpected conversation.");
-        return;
-      }
-      session.userId = String(message.user_id);
-      session.polite = session.userId.localeCompare(match.partner_id) > 0;
-      if (
-        session.transcriptionSpeakerId &&
-        session.transcriptionSpeakerId !== session.userId
-      ) {
-        session.transcriptionReady = false;
-        session.transcriptionSocket?.close(1008, "Speaker identity mismatch");
-        setServerTranscriptStatus("Faster-Whisper authenticated a different speaker.");
-      }
-      startAudioChunkCapture(session);
-      const announceReady = () => {
-        if (session !== callSession || session.partnerReady) {
-          clearInterval(session.readyTimer);
-          session.readyTimer = null;
-          return;
-        }
-        sendCallSignal({ type: "ready" }, session);
-      };
-      announceReady();
-      if (!session.partnerReady) {
-        session.readyTimer = setInterval(announceReady, 1000);
-      }
-      maybeStartCallNegotiation(session);
-    } else {
-      try {
-        await handleCallSignal(message, session);
-      } catch (error) {
-        if (session === callSession) {
-          pauseCallUi(session);
-          updateCallStatus(`Audio negotiation failed: ${error.message}`);
-        }
-      }
-    }
-  };
-
-  socket.onerror = () => {
-    if (session === callSession) {
-      pauseCallUi(session);
-      updateCallStatus("Signaling error. Check your network and try ending the call.");
-    }
-  };
-
-  socket.onclose = (event) => {
-    if (session === callSession) {
-      pauseCallUi(session);
-      updateCallStatus(
-        `Signaling disconnected (${event.code}). Automatic reconnection is not available; end the call and start a new search.`
-      );
-    }
-  };
-
+  connectCallSignaling(session);
+  startMicrophoneIfPermissionGranted(session);
 }
 
 startCallButton.addEventListener("click", () => {
@@ -2084,39 +2297,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 endCallButton.addEventListener("click", async () => {
-  const conversationId = activeMatch?.conversation_id;
-  if (!conversationId || reviewState.inFlight) return;
-
-  reviewState = {
-    conversationId,
-    transcript: null,
-    inFlight: false,
-  };
-  endCallButton.disabled = true;
-  cleanupCall();
-  activeMatch = null;
-  hideNotice();
-  showView("review-view");
-
-  try {
-    await apiRequest("/matching/end", {
-      method: "POST",
-      body: JSON.stringify({ conversation_id: conversationId }),
-    });
-  } catch (error) {
-    if (error.sessionExpired) {
-      showView("auth-view");
-      showNotice(getReviewErrorMessage(error), "error");
-      endCallButton.disabled = false;
-      return;
-    }
-    showNotice(
-      `The call ended, but its matching status could not be updated: ${error.message}`,
-      "error",
-    );
-  }
-
-  await prepareConversationReview(conversationId);
+  await endCallAndReview(callSession);
 });
 
 reviewRetryButton.addEventListener("click", () => {

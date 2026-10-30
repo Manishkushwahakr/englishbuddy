@@ -22,7 +22,8 @@ variables in Render's dashboard:
 | --- | --- |
 | `DATABASE_URL` | The database's internal PostgreSQL connection URL |
 | `SECRET_KEY` | A newly generated, long, random signing key; keep it private |
-| `FRONTEND_ORIGINS` | Additional exact origins beyond the required Vercel and `https://www.improbuddy.in` production origins (comma-separated) |
+| `GEMINI_API_KEY` | Gemini API key; keep it private and configure only on the backend |
+| `FRONTEND_ORIGINS` | Optional additional exact origins, comma-separated |
 | `MATCHING_FALLBACK_WAIT_SECONDS` | Optional; defaults to `9` before adjacent English levels can match |
 | `MATCHING_REPEAT_COOLDOWN_SECONDS` | Optional; defaults to `600` seconds before recently paired users can match again if alternatives exist |
 
@@ -32,10 +33,12 @@ so it requires no database schema migration. A rejected or duplicate skip does
 not consume a skip.
 
 The backend always allows the exact production origins
-`https://englishbuddy-for-me.vercel.app` and `https://www.improbuddy.in`.
-`FRONTEND_ORIGINS` adds extra exact origins, such as a custom domain or a
-specific Vercel preview that needs API access. Do not use `*`. When the
-variable is unset, the backend also allows the local development ports.
+`https://englishbuddy-for-me.vercel.app`, `https://improbuddy.in`, and
+`https://www.improbuddy.in`, as well as the documented localhost development
+origins. `FRONTEND_ORIGINS` adds extra exact origins, such as a custom domain or
+a specific Vercel preview that needs API access. Whitespace and trailing
+slashes are normalized. Do not use `*`; credentials are enabled only with the
+explicit allowlist.
 
 The app creates missing database tables during startup. Set a reachable
 PostgreSQL `DATABASE_URL` before the service starts. Table creation is not a
@@ -62,24 +65,24 @@ Because this frontend is plain static files, Vercel project environment
 variables are not injected into its browser JavaScript. Configure the public
 API URL in `frontend/config.js`; do not put secrets there.
 
-If Render already has a `FRONTEND_ORIGINS` environment variable, it adds
-origins beyond the required production allowlist. Deploy/restart the Render
-service after changing backend CORS configuration. Add any additional custom
-domain or specific Vercel preview origin only if it needs API access; origins
-must be exact (no trailing slash or path).
-If browser developer tools show `Failed to fetch`, check the preflight response:
-the API returns `400 Disallowed CORS origin` when the page's exact origin is not
-in `FRONTEND_ORIGINS`. The frontend displays its current page origin in its
-network-error message to help configure the allowlist.
+Deploy/restart the Render service after changing backend CORS configuration.
+Add any additional custom domain or specific Vercel preview origin only if it
+needs API access. If browser developer tools show a failed request, check both
+the Render health endpoint and the `OPTIONS` preflight response for the page's
+exact origin before diagnosing it as a backend outage.
 
 ## Database and secrets
 
-- Set `DATABASE_URL` and `SECRET_KEY` in the Render service dashboard; do not
-  commit `.env`, database credentials, or JWT signing keys.
+- Set `DATABASE_URL`, `SECRET_KEY`, and `GEMINI_API_KEY` in the Render service
+  dashboard; do not commit `.env`, database credentials, API keys, or JWT
+  signing keys.
 - The existing database layer expects a PostgreSQL URL compatible with
   SQLAlchemy/psycopg2. Use Render's internal database URL when the web service
   and database are in the same region.
 - `SECRET_KEY` signs JWTs. Replacing it invalidates existing login tokens.
+- The existing `conversation_transcripts` and `conversation_analysis` tables
+  must be present in PostgreSQL. The application does not recreate or migrate
+  these tables.
 - The repository's `.gitignore` excludes `.env`.
 
 ## WebRTC and verification limits
@@ -103,14 +106,20 @@ a time per backend process. Busy or malformed chunks are discarded rather than
 queued.
 
 Audio is held temporarily in process memory while Faster-Whisper runs. It is
-not written to files, the database, logs, or an application queue/cache. The
-speaker-labelled Faster-Whisper transcript is retained only in bounded process
-memory (up to 720 chunks / 120,000 characters per conversation) and cleared
-when the conversation ends, is skipped, or the signaling connection closes.
-Process restarts also clear it. There is no transcript database retention or
-LLM feedback in this phase. Keep the Render service at its default single
-Uvicorn worker if relying on this in-memory session transcript; multiple
-workers would maintain separate session memories.
+not written to files, the database, logs, or an application queue/cache. Each
+successful non-empty chunk's transcript text is saved to
+`conversation_transcripts` under the authenticated participant's ID. Chunk
+row IDs are deterministic so a retry does not create another row. Available
+chunk capture times are retained; precise word-level speech times are not
+fabricated. A bounded in-memory transcript is also maintained during the call
+and cleared when the conversation ends or is skipped.
+
+After **End & Review**, the participant-authorized transcript endpoint reads
+saved segments and the analysis endpoint validates Gemini's response before
+saving it in `conversation_analysis`. Audio is never included in either table.
+The call signaling room and reconnect grace timer are process-local, so keep
+the Render service at a single Uvicorn worker unless those are moved to shared
+infrastructure.
 
 The browser's Web Speech API transcript is rendered only in that participant's
 page and is not sent to the other participant. Browser vendors may use remote
@@ -119,10 +128,13 @@ transcription is processed locally. Users who require strictly local browser
 recognition should disable this feature or use a browser that provides an
 on-device recognition mode.
 
-Microphone permission is requested only after the matched user selects
-**Enable microphone and start audio**, keeping the permission prompt tied to a
-clear user action. Browser speech recognition is also opt-in: after the audio
-call connects, expand the transcript panel and select **Start live transcript**
+The site does not request microphone access merely when opened. If browser
+permission is already granted, it initializes the microphone when a match
+starts; otherwise the user selects **Start audio with microphone** to grant
+permission. Denied permissions include a prompt to update browser site settings.
+All microphone tracks are stopped when the call ends. Browser speech
+recognition is also opt-in: after the audio call connects, expand the transcript
+panel and select **Start live transcript**
 so recognition starts from a user action. Support varies by browser and operating
 system; the frontend detects the standard and WebKit-prefixed APIs and reports
 when neither is available. Mobile browsers may suspend recognition when the page
@@ -142,6 +154,13 @@ transcription transport.
    requests to the Render HTTPS origin (not localhost) and no CORS errors.
 3. Register/log in, refresh the page, and log out.
 4. Test matching and WebSocket signaling with two separate browser sessions.
-5. Allow microphone access and verify actual two-way speech on the networks you
-   intend to support. Synthetic media and signaling checks do not prove
-   microphone-based audio; TURN may be required.
+5. Test CORS preflight from `https://improbuddy.in` and
+   `https://www.improbuddy.in` for `POST` with `Authorization,Content-Type`.
+6. Allow microphone access on the first call, end it, and start another call to
+   verify the saved site permission avoids an extra prompt.
+7. Verify transcript rows for both authenticated speakers and the persisted
+   analysis row in PostgreSQL.
+8. End a call from either browser, then test a brief signaling interruption
+   shorter than the reconnect grace period and a disconnect longer than it.
+   Synthetic media and signaling checks do not prove microphone-based audio;
+   TURN may be required.

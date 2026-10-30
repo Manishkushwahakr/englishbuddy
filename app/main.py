@@ -2,9 +2,8 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.database import engine,Base
-from app.config import FRONTEND_ORIGINS
+from app.cors import configure_cors
 from app import models
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.auth import router as auth_router
 from app.routers.profile import router as profile_router
@@ -22,13 +21,7 @@ app = FastAPI(
 )
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=FRONTEND_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_cors(app)
 
 
 print("REGISTERED TABLES:")

@@ -32,33 +32,25 @@ _DEFAULT_FRONTEND_ORIGINS = (
     "http://127.0.0.1:5501",
     "http://localhost:5501",
     "https://englishbuddy-for-me.vercel.app",
+    "https://improbuddy.in",
     "https://www.improbuddy.in",
 )
-_REQUIRED_PRODUCTION_ORIGINS = (
-    "https://englishbuddy-for-me.vercel.app",
-    "https://www.improbuddy.in",
-)
-_configured_origins = os.getenv("FRONTEND_ORIGINS")
 
-if _configured_origins is None:
-    FRONTEND_ORIGINS = list(_DEFAULT_FRONTEND_ORIGINS)
-else:
-    FRONTEND_ORIGINS = list(
+
+def parse_frontend_origins(configured_origins: str | None) -> list[str]:
+    origins = list(
         dict.fromkeys(
             (
-                *_REQUIRED_PRODUCTION_ORIGINS,
+                *_DEFAULT_FRONTEND_ORIGINS,
                 *(
                     origin.strip().rstrip("/")
-                    for origin in _configured_origins.split(",")
+                    for origin in (configured_origins or "").split(",")
                     if origin.strip()
                 ),
             )
         )
     )
-    if not FRONTEND_ORIGINS:
-        raise ValueError("FRONTEND_ORIGINS must contain at least one origin")
-
-    for origin in FRONTEND_ORIGINS:
+    for origin in origins:
         parsed_origin = urlsplit(origin)
         if (
             "*" in origin
@@ -72,3 +64,7 @@ else:
                 "FRONTEND_ORIGINS must be a comma-separated list of exact "
                 "http:// or https:// origins (without paths or wildcards)"
             )
+    return origins
+
+
+FRONTEND_ORIGINS = parse_frontend_origins(os.getenv("FRONTEND_ORIGINS"))
